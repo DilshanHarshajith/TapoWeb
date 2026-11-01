@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tapo PTZ</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">T</span>
+      <div class="brand-text">
+        <h1>Tapo PTZ</h1>
+        <p id="device-line">Not connected</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span class="pill" id="stream-pill"><span class="dot"></span><span id="stream-text">offline</span></span>
+      <button class="ghost" id="sound-btn" type="button">Sound off</button>
+      <button class="ghost" id="snapshot-btn" type="button">Snapshot</button>
+      <button class="ghost" id="fullscreen-btn" type="button">Fullscreen</button>
+      <button class="ghost" id="settings-btn" type="button">Settings</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="video-card">
+      <div class="video-shell" id="video-shell">
+        <video id="video" muted autoplay playsinline></video>
+        <div class="video-overlay" id="video-overlay">
+          <div class="spinner"></div>
+          <span id="video-status">Connecting to stream...</span>
+        </div>
+        <div class="video-hint">Hold a control to move · arrow keys work too</div>
+      </div>
+    </section>
+
+    <aside class="controls">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Pan / Tilt</h2>
+          <span class="muted" id="speed-value">60%</span>
+        </div>
+
+        <div class="dpad">
+          <button class="dir" type="button" data-pan="-1" data-tilt="1" aria-label="Up left">
+            <svg class="arrow r-nw" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 8h-4v9h-6v-9H5z"/></svg>
+          </button>
+          <button class="dir" type="button" data-pan="0" data-tilt="1" aria-label="Up">
+            <svg class="arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 8h-4v9h-6v-9H5z"/></svg>
+          </button>
+          <button class="dir" type="button" data-pan="1" data-tilt="1" aria-label="Up right">
+            <svg class="arrow r-ne" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 8h-4v9h-6v-9H5z"/></svg>
+          </button>
+
+          <button class="dir" type="button" data-pan="-1" data-tilt="0" aria-label="Left">
+            <svg class="arrow r-w" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 8h-4v9h-6v-9H5z"/></svg>
+          </button>
+          <button class="stop" type="button" id="stop-btn" aria-label="Stop">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          </button>
+          <button class="dir" type="button" data-pan="1" data-tilt="0" aria-label="Right">
+            <svg class="arrow r-e" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 8h-4v9h-6v-9H5z"/></svg>
+          </button>
+
+          <button class="dir" type="button" data-pan="-1" data-tilt="-1" aria-label="Down left">
+            <svg class="arrow r-sw" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 8h-4v9h-6v-9H5z"/></svg>
+          </button>
+          <button class="dir" type="button" data-pan="0" data-tilt="-1" aria-label="Down">
+            <svg class="arrow r-s" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 8h-4v9h-6v-9H5z"/></svg>
+          </button>
+          <button class="dir" type="button" data-pan="1" data-tilt="-1" aria-label="Down right">
+            <svg class="arrow r-se" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 8h-4v9h-6v-9H5z"/></svg>
+          </button>
+        </div>
+
+        <div class="zoom-row">
+          <button class="zoom" type="button" id="zoom-out" aria-label="Zoom out">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M7.5 10.5h6"/></svg>
+            Zoom out
+          </button>
+          <span class="zoom-level" id="zoom-value">1.0x</span>
+          <button class="zoom" type="button" id="zoom-in" aria-label="Zoom in">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M7.5 10.5h6M10.5 7.5v6"/></svg>
+            Zoom in
+          </button>
+        </div>
+
+        <label class="slider-row" for="speed">
+          <span>Speed</span>
+          <input type="range" id="speed" min="10" max="100" step="5" value="60">
+        </label>
+
+        <button class="home" type="button" id="home-btn">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7M6 9.5V20h12V9.5"/></svg>
+          Home position
+        </button>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Light &amp; night</h2>
+          <button class="ghost small" type="button" id="light-refresh">Refresh</button>
+        </div>
+        <div class="row">
+          <button class="primary" type="button" id="spotlight-on" disabled>Spotlight on</button>
+          <button class="ghost" type="button" id="spotlight-off" disabled>Spotlight off</button>
+        </div>
+        <div class="segmented" id="night-modes">
+          <button type="button" data-mode="auto" disabled>Auto</button>
+          <button type="button" data-mode="off" disabled>Day</button>
+          <button type="button" data-mode="on" disabled>Night</button>
+        </div>
+        <p class="hint" id="light-hint">Add your Tapo account password in Settings to control the spotlight and night mode.</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Presets</h2>
+          <button class="ghost small" type="button" id="preset-refresh">Refresh</button>
+        </div>
+        <select id="preset-select" aria-label="Preset">
+          <option value="">No presets saved</option>
+        </select>
+        <div class="row">
+          <button class="primary" type="button" id="preset-goto">Go to preset</button>
+          <button class="danger" type="button" id="preset-delete">Delete</button>
+        </div>
+        <div class="row">
+          <input id="preset-name" type="text" placeholder="New preset name" maxlength="40">
+          <button class="primary" type="button" id="preset-save">Save here</button>
+        </div>
+        <p class="hint">Saving stores the camera's current pan, tilt and zoom position.</p>
+      </section>
+    </aside>
+  </main>
+
+  <div class="modal-backdrop" id="setup-modal" hidden>
+    <form class="modal" id="setup-form" autocomplete="off">
+      <h2>Connect to camera</h2>
+      <p class="muted">Use the camera account you already use for RTSP. Nothing is stored on disk.</p>
+
+      <div class="grid-2">
+        <label>Host
+          <input name="host" placeholder="192.168.1.100" required>
+        </label>
+        <label>ONVIF port
+          <input name="port" type="number" value="2020" min="1" max="65535" required>
+        </label>
+      </div>
+
+      <label>Username
+        <input name="user" autocomplete="username" required>
+      </label>
+
+      <label>Password
+        <input name="password" type="password" autocomplete="current-password" placeholder="Camera account password">
+      </label>
+
+      <label>Tapo account password
+        <input name="cloud_password" type="password" autocomplete="current-password" placeholder="Optional · for spotlight and night mode">
+      </label>
+      <p class="hint">The spotlight and day/night controls use the password you sign in to the Tapo app with. The camera account cannot control them. Wrong passwords can lock the local API for 30 minutes.</p>
+
+      <label>Stream
+        <select name="stream">
+          <option value="stream1">stream1 · HD</option>
+          <option value="stream2">stream2 · SD</option>
+        </select>
+      </label>
+
+      <p class="form-error" id="setup-error" hidden></p>
+
+      <div class="modal-actions">
+        <button class="ghost danger" type="button" id="disconnect-btn" hidden>Disconnect</button>
+        <button class="primary" type="submit">Connect</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/static/hls.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

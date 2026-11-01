@@ -1,0 +1,20 @@
+services:
+  tapoweb:
+    build: .
+    image: tapoweb:latest
+    container_name: tapoweb
+    restart: unless-stopped
+    init: true
+    ports:
+      # Host port:container port. The app always listens on 8080 in the container.
+      - "${TAPO_WEB_BIND:-0.0.0.0}:${TAPO_WEB_PORT:-8080}:8080"
+    environment:
+      TAPO_WEB_HOST: 0.0.0.0
+      TAPO_WEB_PORT: 8080
+      # Optional auto-connect. Leave blank to connect from the web UI instead.
+      TAPO_HOST: ${TAPO_HOST:-}
+      TAPO_USER: ${TAPO_USER:-}
+      TAPO_PASS: ${TAPO_PASS:-}
+      TAPO_PORT: ${TAPO_PORT:-2020}
+      TAPO_STREAM: ${TAPO_STREAM:-stream1}
+      TAPO_CLOUD_PASS: ${TAPO_CLOUD_PASS:-}
