@@ -351,6 +351,16 @@ function bindHold(element, pan, tilt, zoom) {
   element.addEventListener("contextmenu", (event) => event.preventDefault());
 }
 
+function keyButton(key) {
+  const vector = KEY_VECTORS[key];
+  if (!vector) return null;
+  return [...$$(".dir")].find(
+    (button) =>
+      Number(button.dataset.pan) === vector[0] &&
+      Number(button.dataset.tilt) === vector[1]
+  );
+}
+
 function keyVector() {
   let pan = 0;
   let tilt = 0;
@@ -582,6 +592,10 @@ function bindControls() {
   window.addEventListener("blur", () => {
     state.keysHeld.clear();
     stopAll();
+    Object.keys(KEY_VECTORS).forEach((key) => {
+      const button = keyButton(key);
+      if (button) button.classList.remove("active");
+    });
   });
 
   window.addEventListener("keydown", (event) => {
@@ -620,6 +634,8 @@ function bindControls() {
       event.preventDefault();
       if (state.keysHeld.has(event.key)) return;
       state.keysHeld.add(event.key);
+      const button = keyButton(event.key);
+      if (button) button.classList.add("active");
       sendKeyMove();
     }
   });
@@ -627,6 +643,8 @@ function bindControls() {
   window.addEventListener("keyup", (event) => {
     if (KEY_VECTORS[event.key] && state.keysHeld.has(event.key)) {
       state.keysHeld.delete(event.key);
+      const button = keyButton(event.key);
+      if (button) button.classList.remove("active");
       sendKeyMove();
     }
   });
