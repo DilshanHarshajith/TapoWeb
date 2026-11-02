@@ -118,7 +118,7 @@ def create_session():
         return jsonify(error="Host is required"), 400
     user = str(data.get("user") or "").strip()
     password = str(data.get("password") or "")
-    cloud_password = str(data.get("cloud_password") or "")
+    cloud_password = str(data.get("cloud_password") or "").strip()
     stream = data.get("stream") or "stream1"
     if stream not in ("stream1", "stream2"):
         stream = "stream1"
@@ -408,7 +408,7 @@ def auto_connect_from_env():
         return
     onvif_port = int(os.environ.get("TAPO_PORT", DEFAULT_ONVIF_PORT))
     stream = os.environ.get("TAPO_STREAM", "stream1")
-    cloud_password = os.environ.get("TAPO_CLOUD_PASS", "")
+    cloud_password = (os.environ.get("TAPO_CLOUD_PASS", "") or "").strip()
     if stream not in ("stream1", "stream2"):
         stream = "stream1"
     try:

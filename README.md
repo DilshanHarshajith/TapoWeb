@@ -179,7 +179,8 @@ TAPO_CLOUD_PASS=tapo-account-pass \
 
 ## Notes
 
-- The camera account password and the Tapo account password are different. The spotlight and day/night controls require the Tapo account password.
+- The camera account password and the Tapo account password are different. The spotlight and day/night controls require the Tapo account password (the one you sign in to the Tapo app with), not the camera account password.
+- If spotlight/night mode reports a wrong password, double-check the Tapo account password (no leading/trailing spaces) and that the camera's local API is not temporarily locked after repeated failed attempts.
 - Repeated wrong Tapo passwords can lock the camera's local API for about 30 minutes.
 - The live view is transcoded to HLS on the fly by ffmpeg. If `ffmpeg` is missing, the UI loads but video will not play. The Docker image includes it.
 - Credentials live in server memory for the lifetime of the process.

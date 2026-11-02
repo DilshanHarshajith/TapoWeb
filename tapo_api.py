@@ -64,7 +64,7 @@ def _as_bool(value):
 class TapoLight:
     def __init__(self, host, cloud_password):
         self.host = host
-        self.cloud_password = cloud_password
+        self.cloud_password = (cloud_password or "").strip()
         self._lock = threading.RLock()
         self._client = None
         self._suspended_until = 0.0
@@ -86,12 +86,14 @@ class TapoLight:
                     self.host,
                     "admin",
                     self.cloud_password,
+                    cloudPassword=self.cloud_password,
                     printWarnInformation=False,
                 )
             except Exception as exc:
                 text = str(exc)
                 if "temporary suspension" in text.lower():
                     self._suspended_until = time.monotonic() + _suspension_seconds(text)
+                print(f"Tapo login failed: {exc}", flush=True)
                 raise TapoError(friendly_tapo_error(exc)) from exc
         return self._client
 
