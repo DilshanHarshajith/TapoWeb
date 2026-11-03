@@ -13,7 +13,7 @@ The app talks to the camera directly on your local network. Credentials are kept
 - Presets: save, go to, delete
 - JPEG snapshots
 - Digital zoom and fullscreen
-- Spotlight and day/night mode via the Tapo local API
+- Spotlight toggle and day/night mode via the Tapo local API
 - Optional auto-connect from environment variables
 - Ready-to-run Docker image and Compose setup
 
