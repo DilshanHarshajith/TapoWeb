@@ -7,6 +7,7 @@ const state = {
   speed: 0.6,
   digitalZoom: 1,
   lightBusy: false,
+  spotlightOn: false,
   presets: [],
   keysHeld: new Set(),
   activeMoves: new Set(),
@@ -114,7 +115,7 @@ function lightAvailable(status = state.status) {
 
 function updateLightAvailability(status = state.status) {
   const available = lightAvailable(status);
-  $$("#night-modes button, #spotlight-on, #spotlight-off, #light-refresh").forEach(
+  $$("#night-modes button, #spotlight-toggle, #light-refresh").forEach(
     (element) => {
       element.disabled = !available || state.lightBusy;
     }
@@ -141,13 +142,16 @@ function markNightMode(mode) {
 }
 
 function markSpotlight(on) {
-  $("#spotlight-on").classList.toggle("active", on === true);
-  $("#spotlight-off").classList.toggle("active", on === false);
+  state.spotlightOn = on === true;
+  const button = $("#spotlight-toggle");
+  button.classList.toggle("active", state.spotlightOn);
+  button.setAttribute("aria-pressed", String(state.spotlightOn));
+  button.textContent = state.spotlightOn ? "Spotlight on" : "Spotlight off";
 }
 
 function setLightBusy(busy) {
   state.lightBusy = busy;
-  $$("#night-modes button, #spotlight-on, #spotlight-off, #light-refresh").forEach(
+  $$("#night-modes button, #spotlight-toggle, #light-refresh").forEach(
     (element) => {
       element.disabled = busy;
     }
@@ -439,8 +443,9 @@ function bindControls() {
   $("#zoom-out").addEventListener("click", () => zoomBy(-ZOOM_STEP));
   applyDigitalZoom();
 
-  $("#spotlight-on").addEventListener("click", () => setSpotlight(true));
-  $("#spotlight-off").addEventListener("click", () => setSpotlight(false));
+  $("#spotlight-toggle").addEventListener("click", () =>
+    setSpotlight(!state.spotlightOn)
+  );
   $("#light-refresh").addEventListener("click", refreshLight);
   $$("#night-modes button").forEach((button) => {
     button.addEventListener("click", () => setNightMode(button.dataset.mode));
