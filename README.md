@@ -1,6 +1,6 @@
 # TapoWeb
 
-A small web UI for controlling a TP-Link Tapo PTZ camera (developed against the Tapo C520WS). It gives you a live HLS stream, pan/tilt/zoom controls, presets, snapshots, and — with your Tapo account password — spotlight and day/night control.
+A small web UI for controlling a TP-Link Tapo camera (developed against the C520WS PTZ model). It gives you a live HLS stream, pan/tilt/zoom controls, presets, snapshots, and — with your Tapo account password — spotlight and day/night control.
 
 The app talks to the camera directly on your local network. Credentials are kept in memory only and are never written to disk.
 
