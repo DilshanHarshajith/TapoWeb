@@ -24,19 +24,25 @@
     </div>
   </header>
 
-  <main class="layout">
-    <section class="video-card">
-      <div class="video-shell" id="video-shell">
-        <video id="video" muted autoplay playsinline></video>
-        <div class="video-overlay" id="video-overlay">
-          <div class="spinner"></div>
-          <span id="video-status">Connecting to stream...</span>
-        </div>
-        <div class="video-hint">Hold a control to move · arrow keys work too</div>
-      </div>
-    </section>
+  <nav class="view-tabs" role="tablist" aria-label="Camera views">
+    <button class="view-tab active" type="button" role="tab" id="tab-live" aria-selected="true" aria-controls="live-view" data-view="live">Live view</button>
+    <button class="view-tab" type="button" role="tab" id="tab-recordings" aria-selected="false" aria-controls="recordings-view" data-view="recordings">Recordings</button>
+  </nav>
 
-    <aside class="controls">
+  <main class="views">
+    <section class="layout" id="live-view" role="tabpanel" aria-labelledby="tab-live">
+      <div class="video-card">
+        <div class="video-shell" id="video-shell">
+          <video id="video" muted autoplay playsinline></video>
+          <div class="video-overlay" id="video-overlay">
+            <div class="spinner"></div>
+            <span id="video-status">Connecting to stream...</span>
+          </div>
+          <div class="video-hint">Hold a control to move · arrow keys work too</div>
+        </div>
+      </div>
+
+      <aside class="controls">
       <section class="panel">
         <div class="panel-head">
           <h2>Pan / Tilt</h2>
@@ -132,7 +138,56 @@
         </div>
         <p class="hint">Saving stores the camera's current pan, tilt and zoom position.</p>
       </section>
-    </aside>
+
+      </aside>
+    </section>
+
+    <section class="layout" id="recordings-view" role="tabpanel" aria-labelledby="tab-recordings" hidden>
+      <div class="video-card">
+        <div class="recording-stage">
+          <video id="recording-video" controls playsinline></video>
+          <div class="recording-placeholder" id="recording-placeholder">
+            <strong>No recording selected</strong>
+            <span>Pick a clip from the SD card to play it here.</span>
+          </div>
+          <div class="video-overlay" id="recording-overlay" hidden>
+            <div class="spinner"></div>
+            <span id="recording-status">Starting playback...</span>
+          </div>
+        </div>
+        <div class="recording-toolbar">
+          <div class="recording-now">
+            <h2 id="recording-title">No recording selected</h2>
+            <p class="hint" id="recording-subtitle">Recordings stream directly from the camera's SD card.</p>
+          </div>
+          <button class="primary" type="button" id="recording-download-btn" hidden>Download clip</button>
+        </div>
+      </div>
+
+      <aside class="controls">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>SD card recordings</h2>
+            <button class="ghost small" type="button" id="recordings-refresh">Refresh</button>
+          </div>
+          <p class="hint" id="recordings-storage">Add your Tapo account password in Settings to browse recordings.</p>
+          <label class="recording-date-row" for="recordings-date">
+            <span>Date</span>
+            <select id="recordings-date" aria-label="Recording date" disabled>
+              <option value="">No recordings</option>
+            </select>
+          </label>
+          <div class="recording-list" id="recordings-list">
+            <p class="hint">Choose a day to see its recordings.</p>
+          </div>
+          <div class="recording-progress" id="recording-progress" hidden>
+            <div class="progress-track"><span id="recording-progress-fill"></span></div>
+            <span class="hint" id="recording-progress-text"></span>
+          </div>
+          <p class="hint">Playback streams from the SD card. Downloads are cached on the server until you disconnect.</p>
+        </section>
+      </aside>
+    </section>
   </main>
 
   <div class="modal-backdrop" id="setup-modal" hidden>
@@ -158,9 +213,9 @@
       </label>
 
       <label>Tapo account password
-        <input name="cloud_password" type="password" autocomplete="current-password" placeholder="Optional · for spotlight and night mode">
+        <input name="cloud_password" type="password" autocomplete="current-password" placeholder="Optional · for spotlight, night mode and recordings">
       </label>
-      <p class="hint">The spotlight and day/night controls use the password you sign in to the Tapo app with. The camera account cannot control them. Wrong passwords can lock the local API for 30 minutes.</p>
+      <p class="hint">The spotlight, day/night and SD card recording controls use the password you sign in to the Tapo app with. The camera account cannot control them. Wrong passwords can lock the local API for 30 minutes.</p>
 
       <label>Stream
         <select name="stream">

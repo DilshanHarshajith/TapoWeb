@@ -2,16 +2,24 @@
 import argparse
 import atexit
 import os
+import re
 import shutil
 import subprocess
 import threading
+import time
 from functools import wraps
 from urllib.parse import quote
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import NotFound
 
 from camera import CameraController, CameraError
+from recordings import (
+    RecordingDownloadManager,
+    RecordingError,
+    RecordingService,
+    RecordingStreamManager,
+)
 from stream import StreamManager
 from tapo_api import TapoError, TapoLight
 
@@ -24,6 +32,9 @@ state_lock = threading.RLock()
 controller = None
 credentials = None
 light_controller = None
+recording_service = None
+recording_downloads = None
+recording_streams = None
 stream_manager = StreamManager()
 
 
@@ -50,6 +61,74 @@ def get_light():
             "Add your Tapo account password in Settings to use the spotlight and night mode"
         )
     return light
+
+
+def get_recording_service():
+    with state_lock:
+        service = recording_service
+        creds = credentials
+    if service is None:
+        if creds is None:
+            raise RecordingError("Not connected to the camera")
+        raise RecordingError(
+            "Add your Tapo account password in Settings to browse SD card recordings"
+        )
+    return service
+
+
+def get_recording_downloads():
+    global recording_downloads
+    with state_lock:
+        service = recording_service
+        creds = credentials
+        manager = recording_downloads
+        if manager is not None:
+            return manager
+        if service is None:
+            if creds is None:
+                raise RecordingError("Not connected to the camera")
+            raise RecordingError(
+                "Add your Tapo account password in Settings to retrieve SD card recordings"
+            )
+        manager = RecordingDownloadManager(service)
+        recording_downloads = manager
+        return manager
+
+
+def get_recording_streams():
+    global recording_streams
+    with state_lock:
+        service = recording_service
+        creds = credentials
+        manager = recording_streams
+        if manager is not None:
+            return manager
+        if service is None:
+            if creds is None:
+                raise RecordingError("Not connected to the camera")
+            raise RecordingError(
+                "Add your Tapo account password in Settings to play SD card recordings"
+            )
+        manager = RecordingStreamManager(service)
+        recording_streams = manager
+        return manager
+
+
+def close_recordings():
+    global recording_service, recording_downloads, recording_streams
+    with state_lock:
+        stream_manager_ = recording_streams
+        manager = recording_downloads
+        service = recording_service
+        recording_streams = None
+        recording_downloads = None
+        recording_service = None
+    if stream_manager_ is not None:
+        stream_manager_.close()
+    if manager is not None:
+        manager.stop()
+    if service is not None:
+        service.close()
 
 
 def current_status():
@@ -111,7 +190,7 @@ def status():
 
 @app.post("/api/session")
 def create_session():
-    global controller, credentials, light_controller
+    global controller, credentials, light_controller, recording_service
     data = request.get_json(silent=True) or {}
     host = str(data.get("host") or DEFAULT_HOST).strip()
     if not host:
@@ -155,11 +234,14 @@ def create_session():
         return jsonify(error=str(exc)), 400
 
     new_light = TapoLight(host, cloud_password) if cloud_password else None
+    new_recordings = RecordingService(host, cloud_password) if cloud_password else None
     url = rtsp_url(host, DEFAULT_RTSP_PORT, user, password, stream)
+    close_recordings()
     with state_lock:
         old_controller = controller
         controller = new_controller
         light_controller = new_light
+        recording_service = new_recordings
         credentials = {
             "host": host,
             "port": onvif_port,
@@ -182,6 +264,7 @@ def delete_session():
         controller = None
         credentials = None
         light_controller = None
+    close_recordings()
     if old_controller is not None:
         old_controller.stop()
     stream_manager.stop()
@@ -202,6 +285,24 @@ def switch_stream():
     stream_manager.start(url, stream)
     with state_lock:
         credentials["stream"] = stream
+    return jsonify(current_status())
+
+
+@app.post("/api/stream/ensure")
+def ensure_stream():
+    with state_lock:
+        creds = dict(credentials) if credentials else None
+    if creds is None:
+        return jsonify(error="Not connected to the camera"), 401
+    if not stream_manager.is_running():
+        url = rtsp_url(
+            creds["host"],
+            DEFAULT_RTSP_PORT,
+            creds["user"],
+            creds["password"],
+            creds["stream"],
+        )
+        stream_manager.start(url, creds["stream"])
     return jsonify(current_status())
 
 
@@ -333,6 +434,144 @@ def night_set():
         return jsonify(error=str(exc)), 400
 
 
+@app.get("/api/recordings/dates")
+def recording_dates():
+    try:
+        service = get_recording_service()
+        return jsonify({"storage": service.storage(), "dates": service.dates()})
+    except RecordingError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@app.get("/api/recordings")
+def recordings_for_date():
+    date = str(request.args.get("date") or "").strip()
+    if not date:
+        return jsonify(error="Recording date is required"), 400
+    try:
+        service = get_recording_service()
+        return jsonify({"date": date, "recordings": service.list_for_date(date)})
+    except RecordingError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@app.post("/api/recordings/download")
+def recording_download_create():
+    data = request.get_json(silent=True) or {}
+    try:
+        manager = get_recording_downloads()
+        job = manager.create(data.get("start"), data.get("end"))
+    except RecordingError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(job), 202
+
+
+@app.get("/api/recordings/download/<job_id>")
+def recording_download_status(job_id):
+    with state_lock:
+        manager = recording_downloads
+    job = manager.get(job_id) if manager is not None else None
+    if job is None:
+        return jsonify(error="Recording download not found"), 404
+    return jsonify(job)
+
+
+@app.get("/api/recordings/file/<job_id>")
+def recording_file(job_id):
+    with state_lock:
+        manager = recording_downloads
+    if manager is None:
+        return jsonify(error="Recording download not found"), 404
+    job = manager.get(job_id)
+    path = manager.path(job_id)
+    if job is None or path is None:
+        return jsonify(error="Recording is not ready"), 404
+    as_attachment = request.args.get("download") in ("1", "true", "yes")
+    filename = f"recording-{job['startTime']}-{job['endTime']}.mp4"
+    return send_file(
+        path,
+        mimetype="video/mp4",
+        conditional=True,
+        as_attachment=as_attachment,
+        download_name=filename,
+        max_age=0,
+    )
+
+
+@app.post("/api/recordings/stream")
+def recording_stream_start():
+    data = request.get_json(silent=True) or {}
+    try:
+        manager = get_recording_streams()
+        # The camera generally serves one media session at a time. Stop the
+        # RTSP live stream before opening the SD card playback session.
+        stream_manager.stop()
+        time.sleep(0.4)
+        stream = manager.start(data.get("start"), data.get("end"))
+    except RecordingError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(stream), 202
+
+
+@app.get("/api/recordings/stream/<stream_id>")
+def recording_stream_status(stream_id):
+    with state_lock:
+        manager = recording_streams
+    stream = manager.get(stream_id) if manager is not None else None
+    if stream is None:
+        return jsonify(error="Recording stream not found"), 404
+    return jsonify(stream)
+
+
+@app.delete("/api/recordings/stream/<stream_id>")
+def recording_stream_stop(stream_id):
+    with state_lock:
+        manager = recording_streams
+    if manager is None or not manager.stop(stream_id):
+        return jsonify(error="Recording stream not found"), 404
+    return jsonify(ok=True)
+
+
+@app.get("/api/recordings/stream/<stream_id>/index.m3u8")
+def recording_stream_playlist(stream_id):
+    with state_lock:
+        manager = recording_streams
+    path = manager.playlist(stream_id) if manager is not None else None
+    if path is None:
+        return jsonify(error="Recording stream is not ready"), 404
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as file:
+            content = file.read()
+    except OSError:
+        return jsonify(error="Recording stream is not ready"), 404
+    if "#EXTINF" not in content:
+        return jsonify(error="Recording stream is not ready"), 404
+    response = Response(content, mimetype="application/vnd.apple.mpegurl")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.get("/api/recordings/stream/<stream_id>/<path:filename>")
+def recording_stream_segment(stream_id, filename):
+    with state_lock:
+        manager = recording_streams
+    directory = manager.directory(stream_id) if manager is not None else None
+    if directory is None:
+        return jsonify(error="Recording stream not found"), 404
+    name = os.path.basename(filename)
+    if not re.fullmatch(r"seg\d+\.ts", name):
+        return jsonify(error="Not found"), 404
+    try:
+        response = send_from_directory(
+            directory, name, mimetype="video/mp2t", conditional=True
+        )
+    except NotFound:
+        return jsonify(error="Not found"), 404
+    response.headers["Cache-Control"] = "public, max-age=30"
+    return response
+
+
 @app.get("/api/snapshot")
 def snapshot():
     with state_lock:
@@ -397,7 +636,7 @@ def hls(filename):
 
 
 def auto_connect_from_env():
-    global controller, credentials, light_controller
+    global controller, credentials, light_controller, recording_service
     user = os.environ.get("TAPO_USER")
     password = os.environ.get("TAPO_PASS")
     if not user or not password:
@@ -418,6 +657,7 @@ def auto_connect_from_env():
         return
     controller = cam
     light_controller = TapoLight(host, cloud_password) if cloud_password else None
+    recording_service = RecordingService(host, cloud_password) if cloud_password else None
     credentials = {
         "host": host,
         "port": onvif_port,
@@ -448,6 +688,7 @@ def main():
 
     auto_connect_from_env()
     atexit.register(stream_manager.stop)
+    atexit.register(close_recordings)
     print(f"Tapo web UI: http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, threaded=True, debug=False)
 

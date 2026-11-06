@@ -122,6 +122,37 @@ select:focus-visible {
   flex-wrap: wrap;
 }
 
+.view-tabs {
+  display: flex;
+  gap: 6px;
+  width: min(1500px, 100%);
+  margin: 0 auto;
+  padding: 14px 22px 0;
+}
+
+.view-tab {
+  padding: 7px 15px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.view-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.view-tab.active {
+  color: var(--accent);
+  background: rgba(46, 230, 176, 0.09);
+  border-color: rgba(46, 230, 176, 0.35);
+}
+
 .ghost {
   background: transparent;
   border: 1px solid var(--border);
@@ -575,6 +606,166 @@ select:focus-visible {
   background: #111b27;
 }
 
+.recording-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.recording-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: #0d141d;
+}
+
+.recording-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recording-time {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.recording-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.recording-actions {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.recording-actions .ghost {
+  padding: 5px 8px;
+  font-size: 11.5px;
+}
+
+.recording-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.progress-track {
+  height: 5px;
+  border-radius: 999px;
+  background: #0b1118;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #19a9ff);
+  transition: width 0.3s ease;
+}
+
+.recording-stage {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.recording-stage:fullscreen {
+  border-radius: 0;
+  border: 0;
+  aspect-ratio: auto;
+  width: 100vw;
+  height: 100vh;
+}
+
+.recording-stage video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.recording-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+  background:
+    radial-gradient(600px 260px at 50% 0%, rgba(46, 230, 176, 0.08), transparent 70%),
+    #0a1017;
+}
+
+.recording-placeholder strong {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.recording-placeholder span {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.recording-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 2px 0;
+}
+
+.recording-now {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.recording-now h2 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.recording-date-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.recording-date-row > span {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+a.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 select,
 input[type="text"],
 input[type="password"],
@@ -717,8 +908,21 @@ input:hover {
     padding: 10px 14px;
   }
 
+  .view-tabs {
+    padding: 10px 14px 0;
+  }
+
   .layout {
     padding: 14px;
+  }
+
+  .recording-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .recording-toolbar .primary {
+    width: 100%;
   }
 
   .top-actions .ghost {
@@ -729,5 +933,14 @@ input:hover {
   .dpad {
     grid-template-columns: repeat(3, 58px);
     grid-template-rows: repeat(3, 58px);
+  }
+
+  .recording-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .recording-actions .ghost {
+    flex: 1;
   }
 }

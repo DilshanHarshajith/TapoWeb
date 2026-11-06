@@ -1,3 +1,4 @@
 flask>=3.0
-pytapo>=3.0
+pytapo>=3.4.30
 onvif-zeep>=0.2.12
+aiofiles>=23.0
