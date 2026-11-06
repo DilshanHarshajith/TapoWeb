@@ -15,6 +15,7 @@ The app talks to the camera directly on your local network. Credentials are kept
 - Digital zoom and fullscreen
 - Spotlight toggle and day/night mode via the Tapo local API
 - SD card recordings: browse clips by date, stream them directly, and download them as MP4
+- Two-way audio ("Call"): speak through the camera speaker from the browser (requires the Tapo account password and a secure context)
 - Separate Live view and Recordings tabs
 - Optional auto-connect from environment variables
 - Ready-to-run Docker image and Compose setup
@@ -114,6 +115,8 @@ If the camera is unreachable from the container (some NAS, VM, or VLAN setups), 
 The UI is then available directly on port `8080` (change `TAPO_WEB_PORT` if that port is taken). Host networking is only supported natively on Linux.
 
 > The UI has no authentication. Only publish it on networks you trust, and prefer `TAPO_WEB_BIND=127.0.0.1` when you don't need access from other devices.
+
+The Call button uses your browser microphone. Microphone access requires a secure context, so it only works on `http://localhost` or over `https://`. Plain `http://<lan-ip>` cannot capture audio.
 
 ## Manual setup
 

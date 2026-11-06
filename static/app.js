@@ -8,6 +8,11 @@ const state = {
   digitalZoom: 1,
   lightBusy: false,
   spotlightOn: false,
+  talkActive: false,
+  talkBuffer: new Uint8Array(0),
+  talkQueue: [],
+  talkSending: false,
+  talkNodes: null,
   presets: [],
   recordingDates: [],
   recordings: [],
@@ -103,6 +108,10 @@ function applyStatus(status) {
   }
   updateLightAvailability(status);
   updateRecordingsAvailability(status);
+  if (!status.authenticated && state.talkActive) {
+    stopTalk({ silent: true });
+  }
+  updateTalkAvailability(status);
 }
 
 function applyDigitalZoom() {
@@ -216,6 +225,245 @@ async function setNightMode(mode) {
   }
 }
 
+function talkAvailable(status = state.status) {
+  return Boolean(status && status.authenticated && status.has_cloud_password);
+}
+
+function updateTalkAvailability(status = state.status) {
+  const button = $("#call-btn");
+  if (!button) return;
+  const available = talkAvailable(status);
+  if (!state.talkActive) {
+    button.disabled = !available;
+    button.textContent = "Call";
+    button.classList.remove("active");
+    button.title = available
+      ? "Talk through the camera (requires HTTPS or localhost)"
+      : "Add your Tapo account password in Settings to call the camera";
+  } else {
+    button.disabled = false;
+    button.textContent = "End call";
+    button.classList.add("active");
+    button.title = "End the call";
+  }
+}
+
+function linearToAlaw(sample) {
+  const pcm = Math.max(-32768, Math.min(32767, Math.round(sample * 32767)));
+  let value = pcm >> 3;
+  let mask;
+  if (value >= 0) {
+    mask = 0xd5;
+  } else {
+    mask = 0x55;
+    value = -value - 1;
+  }
+  const segments = [0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff, 0x1fff, 0x3fff, 0x7fff];
+  let segment = 0;
+  while (segment < 8 && value > segments[segment]) segment += 1;
+  if (segment >= 8) return 0x7f ^ mask;
+  let aval = segment << 4;
+  if (segment < 2) {
+    aval |= (value >> 1) & 0x0f;
+  } else {
+    aval |= (value >> segment) & 0x0f;
+  }
+  return (aval ^ mask) & 0xff;
+}
+
+class TalkDownsampler {
+  constructor(inputRate, outputRate) {
+    this.ratio = inputRate / outputRate;
+    this.carry = new Float32Array(0);
+    this.pos = 0;
+  }
+  process(input) {
+    const data =
+      this.carry.length > 0 ? new Float32Array(this.carry.length + input.length) : input;
+    if (this.carry.length > 0) {
+      data.set(this.carry, 0);
+      data.set(input, this.carry.length);
+    }
+    const output = [];
+    let pos = this.pos;
+    while (pos < data.length - 1) {
+      const i = Math.floor(pos);
+      const frac = pos - i;
+      const sample = data[i] + (data[i + 1] - data[i]) * frac;
+      output.push(sample);
+      pos += this.ratio;
+    }
+    const keepFrom = Math.max(0, Math.floor(pos));
+    this.carry = data.slice(keepFrom);
+    this.pos = pos - keepFrom;
+    return output;
+  }
+}
+
+function concatBytes(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+async function postTalkAudio(bytes) {
+  const response = await fetch("/api/talk/audio", {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: bytes,
+  });
+  let data = null;
+  if ((response.headers.get("content-type") || "").includes("application/json")) {
+    data = await response.json().catch(() => null);
+  }
+  if (!response.ok) {
+    throw new Error((data && data.error) || `Request failed (${response.status})`);
+  }
+  return data;
+}
+
+function cleanupTalkAudio() {
+  if (!state.talkNodes) return;
+  const nodes = state.talkNodes;
+  try {
+    if (nodes.processor) nodes.processor.onaudioprocess = null;
+    nodes.processor && nodes.processor.disconnect();
+    nodes.source && nodes.source.disconnect();
+    nodes.mute && nodes.mute.disconnect();
+    nodes.stream.getTracks().forEach((track) => track.stop());
+    nodes.ctx && nodes.ctx.close().catch(() => {});
+  } catch (error) {}
+  state.talkNodes = null;
+}
+
+function enqueueTalkAudio(bytes) {
+  if (!state.talkActive) return;
+  state.talkBuffer = concatBytes(state.talkBuffer, bytes);
+  while (state.talkBuffer.length >= 800) {
+    const chunk = state.talkBuffer.slice(0, 800);
+    state.talkBuffer = state.talkBuffer.slice(800);
+    state.talkQueue.push(chunk);
+    if (state.talkQueue.length > 20) {
+      state.talkQueue.splice(0, state.talkQueue.length - 20);
+    }
+  }
+  pumpTalkAudio();
+}
+
+async function pumpTalkAudio() {
+  if (state.talkSending) return;
+  state.talkSending = true;
+  while (state.talkActive && state.talkQueue.length > 0) {
+    const chunk = state.talkQueue.shift();
+    try {
+      await postTalkAudio(chunk);
+    } catch (error) {
+      if (state.talkActive) {
+        showError(error);
+        await stopTalk({ silent: true });
+      }
+      break;
+    }
+  }
+  state.talkSending = false;
+}
+
+async function startTalk() {
+  if (state.talkActive) return;
+  if (!talkAvailable()) {
+    openSetup();
+    return;
+  }
+  if (!window.isSecureContext) {
+    toast("Microphone access requires HTTPS or localhost", "error");
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast("This browser cannot access the microphone", "error");
+    return;
+  }
+  const button = $("#call-btn");
+  button.disabled = true;
+  button.textContent = "Calling...";
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    await api("/api/talk/start", { method: "POST" });
+    state.talkActive = true;
+    state.talkBuffer = new Uint8Array(0);
+    state.talkQueue = [];
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioContext();
+    await ctx.resume();
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    source.connect(processor);
+    processor.connect(mute);
+    mute.connect(ctx.destination);
+    const downsampler = new TalkDownsampler(ctx.sampleRate, 8000);
+    processor.onaudioprocess = (event) => {
+      if (!state.talkActive) return;
+      const input = event.inputBuffer.getChannelData(0);
+      const resampled = downsampler.process(input);
+      const alaw = new Uint8Array(resampled.length);
+      for (let i = 0; i < resampled.length; i++) {
+        alaw[i] = linearToAlaw(resampled[i]);
+      }
+      enqueueTalkAudio(alaw);
+    };
+    state.talkNodes = { ctx, source, processor, mute, stream };
+    updateTalkAvailability();
+    const video = $("#video");
+    if (video.muted) {
+      video.muted = false;
+      $("#sound-btn").textContent = "Sound on";
+      video.play().catch(() => {});
+    }
+    toast("Call started");
+  } catch (error) {
+    if (stream) stream.getTracks().forEach((track) => track.stop());
+    try {
+      await api("/api/talk/stop", { method: "POST" });
+    } catch (inner) {}
+    cleanupTalkAudio();
+    state.talkActive = false;
+    updateTalkAvailability();
+    showError(error);
+  }
+}
+
+async function stopTalk(options = {}) {
+  const wasActive = state.talkActive;
+  state.talkActive = false;
+  cleanupTalkAudio();
+  state.talkQueue = [];
+  state.talkBuffer = new Uint8Array(0);
+  updateTalkAvailability();
+  if (!wasActive && !options.force) return;
+  if (options.keepalive) {
+    try {
+      navigator.sendBeacon("/api/talk/stop");
+    } catch (error) {}
+    return;
+  }
+  try {
+    await api("/api/talk/stop", { method: "POST" });
+  } catch (error) {
+    if (!options.silent) showError(error);
+  }
+  if (!options.silent) toast("Call ended");
+}
+
 function recordingsAvailable(status = state.status) {
   return Boolean(status && status.authenticated && status.has_cloud_password);
 }
@@ -264,6 +512,10 @@ async function switchView(view) {
   $("#recordings-view").hidden = view !== "recordings";
   $("#sound-btn").hidden = view !== "live";
   $("#snapshot-btn").hidden = view !== "live";
+  $("#call-btn").hidden = view !== "live";
+  if (view !== "live" && state.talkActive) {
+    stopTalk({ silent: true });
+  }
 
   if (view === "live") {
     await stopRecordingPlayback();
@@ -745,6 +997,7 @@ function fillSetupForm(status) {
 
 function openSetup() {
   state.keysHeld.clear();
+  if (state.talkActive) stopTalk({ silent: true });
   stopAll();
   fillSetupForm(state.status);
   $("#setup-modal").hidden = false;
@@ -988,6 +1241,14 @@ function bindControls() {
 
   $("#settings-btn").addEventListener("click", openSetup);
 
+  $("#call-btn").addEventListener("click", () => {
+    if (state.talkActive) {
+      stopTalk();
+    } else {
+      startTalk();
+    }
+  });
+
   $("#setup-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1030,6 +1291,7 @@ function bindControls() {
   $("#disconnect-btn").addEventListener("click", async () => {
     if (!window.confirm("Disconnect from the camera and stop the stream?")) return;
     try {
+      await stopTalk({ silent: true });
       const status = await api("/api/session", { method: "DELETE" });
       stopHls();
       const video = $("#video");
@@ -1137,6 +1399,16 @@ function bindControls() {
 
   window.addEventListener("pointerup", stopAll);
   window.addEventListener("pointercancel", stopAll);
+
+  window.addEventListener("pagehide", () => {
+    if (state.talkActive) {
+      state.talkActive = false;
+      cleanupTalkAudio();
+      try {
+        navigator.sendBeacon("/api/talk/stop");
+      } catch (error) {}
+    }
+  });
   window.addEventListener("blur", () => {
     state.keysHeld.clear();
     stopAll();

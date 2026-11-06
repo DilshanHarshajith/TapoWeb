@@ -23,7 +23,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py camera.py stream.py tapo_api.py recordings.py ./
+COPY app.py camera.py stream.py tapo_api.py recordings.py talk.py ./
 COPY static ./static
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin app \

@@ -21,6 +21,7 @@ from recordings import (
     RecordingStreamManager,
 )
 from stream import StreamManager
+from talk import TalkError, TapoTalk
 from tapo_api import TapoError, TapoLight
 
 DEFAULT_HOST = ""
@@ -35,6 +36,7 @@ light_controller = None
 recording_service = None
 recording_downloads = None
 recording_streams = None
+talk_session = None
 stream_manager = StreamManager()
 
 
@@ -131,17 +133,41 @@ def close_recordings():
         service.close()
 
 
+def get_talk_credentials():
+    with state_lock:
+        creds = dict(credentials) if credentials else None
+    if creds is None:
+        raise TalkError("Not connected to the camera")
+    if not creds.get("cloud_password"):
+        raise TalkError(
+            "Add your Tapo account password in Settings to call the camera"
+        )
+    return creds
+
+
+def close_talk():
+    global talk_session
+    with state_lock:
+        session = talk_session
+        talk_session = None
+    if session is not None:
+        session.stop()
+
+
 def current_status():
     with state_lock:
         cam = controller
         creds = credentials
         has_cloud_password = bool(creds and creds.get("cloud_password"))
+        talk = talk_session
+    talk_active = talk is not None and talk.active
     if cam is None:
         return {
             "authenticated": False,
             "stream": stream_manager.stream,
             "stream_running": stream_manager.is_running(),
             "has_cloud_password": has_cloud_password,
+            "talk_active": talk_active,
         }
     return {
         "authenticated": True,
@@ -153,6 +179,7 @@ def current_status():
         "stream_running": stream_manager.is_running(),
         "max_hold": CameraController.MAX_HOLD_SECONDS,
         "has_cloud_password": has_cloud_password,
+        "talk_active": talk_active,
     }
 
 
@@ -236,6 +263,7 @@ def create_session():
     new_light = TapoLight(host, cloud_password) if cloud_password else None
     new_recordings = RecordingService(host, cloud_password) if cloud_password else None
     url = rtsp_url(host, DEFAULT_RTSP_PORT, user, password, stream)
+    close_talk()
     close_recordings()
     with state_lock:
         old_controller = controller
@@ -264,6 +292,7 @@ def delete_session():
         controller = None
         credentials = None
         light_controller = None
+    close_talk()
     close_recordings()
     if old_controller is not None:
         old_controller.stop()
@@ -505,6 +534,7 @@ def recording_stream_start():
         manager = get_recording_streams()
         # The camera generally serves one media session at a time. Stop the
         # RTSP live stream before opening the SD card playback session.
+        close_talk()
         stream_manager.stop()
         time.sleep(0.4)
         stream = manager.start(data.get("start"), data.get("end"))
@@ -570,6 +600,49 @@ def recording_stream_segment(stream_id, filename):
         return jsonify(error="Not found"), 404
     response.headers["Cache-Control"] = "public, max-age=30"
     return response
+
+
+@app.post("/api/talk/start")
+def talk_start():
+    global talk_session
+    try:
+        creds = get_talk_credentials()
+    except TalkError as exc:
+        return jsonify(error=str(exc)), 400
+    close_talk()
+    session = TapoTalk(creds["host"], creds["cloud_password"])
+    try:
+        session.start()
+    except TalkError as exc:
+        return jsonify(error=str(exc)), 400
+    with state_lock:
+        talk_session = session
+    return jsonify(active=True)
+
+
+@app.post("/api/talk/audio")
+def talk_audio():
+    data = request.get_data(cache=False)
+    if not data:
+        return jsonify(ok=True)
+    if len(data) > 256 * 1024:
+        return jsonify(error="Audio chunk is too large"), 413
+    with state_lock:
+        session = talk_session
+    if session is None:
+        return jsonify(error="The camera call is not active"), 409
+    try:
+        session.send_audio(data)
+    except TalkError as exc:
+        close_talk()
+        return jsonify(error=str(exc)), 400
+    return jsonify(ok=True)
+
+
+@app.post("/api/talk/stop")
+def talk_stop():
+    close_talk()
+    return jsonify(active=False)
 
 
 @app.get("/api/snapshot")
@@ -688,6 +761,7 @@ def main():
 
     auto_connect_from_env()
     atexit.register(stream_manager.stop)
+    atexit.register(close_talk)
     atexit.register(close_recordings)
     print(f"Tapo web UI: http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, threaded=True, debug=False)
