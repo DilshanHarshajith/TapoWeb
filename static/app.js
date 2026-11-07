@@ -9,6 +9,8 @@ const state = {
   lightBusy: false,
   spotlightOn: false,
   talkActive: false,
+  talkStarting: false,
+  talkCancel: false,
   talkBuffer: new Uint8Array(0),
   talkQueue: [],
   talkSending: false,
@@ -27,7 +29,10 @@ const state = {
   view: "live",
   keysHeld: new Set(),
   activeMoves: new Set(),
+  keyDebug: new URLSearchParams(window.location.search).has("keys"),
 };
+
+let bufferingTimer = null;
 
 let videoRestartTimer = null;
 let toastTimer = null;
@@ -40,9 +45,44 @@ const KEY_VECTORS = {
   ArrowRight: [1, 0],
 };
 
+// Resolve shortcuts from event.key first and fall back to the physical
+// event.code so non-Latin layouts and remote keyboards still work.
+function shortcutKey(event) {
+  const key = event.key || "";
+  const code = event.code || "";
+  if (key === " " || key === "Spacebar" || code === "Space") return "space";
+  if (key.length === 1 && /^[a-z0-9]$/i.test(key)) return key.toLowerCase();
+  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(code);
+  if (digit) return digit[1];
+  const letter = /^Key([A-Z])$/.exec(code);
+  if (letter) return letter[1].toLowerCase();
+  // Last resort for very old browsers or unusual input devices.
+  const keyCode = event.keyCode || event.which || 0;
+  if (keyCode === 32) return "space";
+  if (keyCode >= 48 && keyCode <= 57) return String.fromCharCode(keyCode);
+  if (keyCode >= 65 && keyCode <= 90) return String.fromCharCode(keyCode).toLowerCase();
+  if (keyCode >= 96 && keyCode <= 105) return String(keyCode - 96);
+  return "";
+}
+
+function arrowKey(event) {
+  if (KEY_VECTORS[event.key]) return event.key;
+  if (KEY_VECTORS[event.code]) return event.code;
+  return "";
+}
+
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
 const ZOOM_STEP = 0.5;
+const TALK_HOLD_DELAY = 300;
+
+const talkKey = {
+  timer: null,
+  pressed: false,
+  holding: false,
+  startedByHold: false,
+  released: true,
+};
 
 async function api(path, { method = "GET", body } = {}) {
   const options = { method, headers: {} };
@@ -195,7 +235,14 @@ async function refreshLight() {
 }
 
 async function setSpotlight(on) {
-  if (!lightAvailable()) return;
+  if (!lightAvailable()) {
+    toast("Add your Tapo account password in Settings to use the spotlight.", "error");
+    return;
+  }
+  if (state.lightBusy) {
+    toast("Wait for the current light command to finish");
+    return;
+  }
   setLightBusy(true);
   try {
     await api("/api/light", { method: "POST", body: { on } });
@@ -210,7 +257,14 @@ async function setSpotlight(on) {
 }
 
 async function setNightMode(mode) {
-  if (!lightAvailable()) return;
+  if (!lightAvailable()) {
+    toast("Add your Tapo account password in Settings to change night mode.", "error");
+    return;
+  }
+  if (state.lightBusy) {
+    toast("Wait for the current light command to finish");
+    return;
+  }
   setLightBusy(true);
   try {
     await api("/api/night", { method: "POST", body: { mode } });
@@ -238,7 +292,7 @@ function updateTalkAvailability(status = state.status) {
     button.textContent = "Call";
     button.classList.remove("active");
     button.title = available
-      ? "Talk through the camera (requires HTTPS or localhost)"
+      ? "Talk through the camera (requires HTTPS or localhost) · Tap Space to toggle, hold Space to talk"
       : "Add your Tapo account password in Settings to call the camera";
   } else {
     button.disabled = false;
@@ -369,8 +423,8 @@ async function pumpTalkAudio() {
   state.talkSending = false;
 }
 
-async function startTalk() {
-  if (state.talkActive) return;
+async function startTalk(options = {}) {
+  if (state.talkActive || state.talkStarting) return;
   if (!talkAvailable()) {
     openSetup();
     return;
@@ -384,8 +438,11 @@ async function startTalk() {
     return;
   }
   const button = $("#call-btn");
+  state.talkStarting = true;
+  state.talkCancel = false;
   button.disabled = true;
   button.textContent = "Calling...";
+  if (!options.silent) toast("Starting call...");
   let stream = null;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -397,6 +454,16 @@ async function startTalk() {
       },
     });
     await api("/api/talk/start", { method: "POST" });
+    if (state.talkCancel) {
+      state.talkCancel = false;
+      stream.getTracks().forEach((track) => track.stop());
+      try {
+        await api("/api/talk/stop", { method: "POST" });
+      } catch (inner) {}
+      cleanupTalkAudio();
+      updateTalkAvailability();
+      return;
+    }
     state.talkActive = true;
     state.talkBuffer = new Uint8Array(0);
     state.talkQueue = [];
@@ -429,7 +496,7 @@ async function startTalk() {
       $("#sound-btn").textContent = "Sound on";
       video.play().catch(() => {});
     }
-    toast("Call started");
+    if (!options.silent) toast("Call started");
   } catch (error) {
     if (stream) stream.getTracks().forEach((track) => track.stop());
     try {
@@ -439,10 +506,13 @@ async function startTalk() {
     state.talkActive = false;
     updateTalkAvailability();
     showError(error);
+  } finally {
+    state.talkStarting = false;
   }
 }
 
 async function stopTalk(options = {}) {
+  if (state.talkStarting) state.talkCancel = true;
   const wasActive = state.talkActive;
   state.talkActive = false;
   cleanupTalkAudio();
@@ -462,6 +532,76 @@ async function stopTalk(options = {}) {
     if (!options.silent) showError(error);
   }
   if (!options.silent) toast("Call ended");
+}
+
+function clearTalkKeyTimer() {
+  clearTimeout(talkKey.timer);
+  talkKey.timer = null;
+}
+
+async function startPushToTalk() {
+  if (state.talkActive) return;
+  talkKey.startedByHold = true;
+  await startTalk({ silent: true });
+  if (talkKey.released && talkKey.startedByHold) {
+    talkKey.startedByHold = false;
+    if (state.talkActive) stopTalk({ silent: true });
+  }
+}
+
+function handleTalkKeyDown(event) {
+  if (talkKey.pressed) return;
+  event.preventDefault();
+  talkKey.pressed = true;
+  talkKey.holding = false;
+  talkKey.startedByHold = false;
+  talkKey.released = false;
+  clearTalkKeyTimer();
+  talkKey.timer = setTimeout(() => {
+    talkKey.timer = null;
+    talkKey.holding = true;
+    if (!state.talkActive) startPushToTalk();
+  }, TALK_HOLD_DELAY);
+}
+
+function handleTalkKeyUp(event) {
+  if (!talkKey.pressed) return;
+  event.preventDefault();
+  clearTalkKeyTimer();
+  const wasHolding = talkKey.holding;
+  talkKey.pressed = false;
+  talkKey.holding = false;
+  talkKey.released = true;
+
+  if (wasHolding) {
+    // Push-to-talk: stop as soon as the key is released. If the call was
+    // already active before the hold, leave it running.
+    if (state.talkActive && talkKey.startedByHold) {
+      talkKey.startedByHold = false;
+      stopTalk();
+    }
+    return;
+  }
+
+  // A quick tap toggles the call on or off. A tap while the call is still
+  // starting cancels it.
+  if (state.talkActive || state.talkStarting) {
+    stopTalk();
+  } else {
+    startTalk();
+  }
+}
+
+function cancelTalkKeyHold() {
+  clearTalkKeyTimer();
+  const wasHolding = talkKey.holding;
+  talkKey.pressed = false;
+  talkKey.holding = false;
+  talkKey.released = true;
+  if (wasHolding && talkKey.startedByHold && state.talkActive) {
+    talkKey.startedByHold = false;
+    stopTalk({ silent: true });
+  }
 }
 
 function recordingsAvailable(status = state.status) {
@@ -513,8 +653,9 @@ async function switchView(view) {
   $("#sound-btn").hidden = view !== "live";
   $("#snapshot-btn").hidden = view !== "live";
   $("#call-btn").hidden = view !== "live";
-  if (view !== "live" && state.talkActive) {
-    stopTalk({ silent: true });
+  if (view !== "live") {
+    cancelTalkKeyHold();
+    if (state.talkActive) stopTalk({ silent: true });
   }
 
   if (view === "live") {
@@ -996,6 +1137,7 @@ function fillSetupForm(status) {
 }
 
 function openSetup() {
+  cancelTalkKeyHold();
   state.keysHeld.clear();
   if (state.talkActive) stopTalk({ silent: true });
   stopAll();
@@ -1036,14 +1178,22 @@ function startVideo() {
   const video = $("#video");
   const source = "/hls/index.m3u8";
   stopHls();
+  clearTimeout(bufferingTimer);
+  bufferingTimer = null;
   setVideoStatus("Connecting to stream...");
 
   if (window.Hls && window.Hls.isSupported()) {
+    // Keep a couple of segments of slack. The camera occasionally pauses for a
+    // fraction of a second while it handles a control command; with a one
+    // segment buffer that was enough to make the player show "Buffering...".
     const hls = new window.Hls({
-      lowLatencyMode: true,
-      liveSyncDurationCount: 1,
-      liveMaxLatencyDurationCount: 3,
-      backBufferLength: 0,
+      lowLatencyMode: false,
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 5,
+      backBufferLength: 15,
+      maxBufferLength: 20,
+      maxMaxBufferLength: 40,
+      maxLiveSyncPlaybackRate: 1.5,
       enableWorker: true,
     });
     state.hls = hls;
@@ -1199,6 +1349,24 @@ async function loadPresets() {
   }
 }
 
+async function goToPreset(token) {
+  if (!token) return;
+  try {
+    await queuePtz("/api/ptz/preset/goto", { token, speed: state.speed });
+    toast("Moving to preset");
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function takeSnapshot() {
+  if (!state.status || !state.status.authenticated) {
+    openSetup();
+    return;
+  }
+  window.open(`/api/snapshot?t=${Date.now()}`, "_blank", "noopener");
+}
+
 function bindControls() {
   $$(".view-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchView(tab.dataset.view));
@@ -1311,6 +1479,9 @@ function bindControls() {
   });
 
   $("#preset-refresh").addEventListener("click", loadPresets);
+  $("#preset-select").addEventListener("change", (event) =>
+    event.target.blur()
+  );
 
   $("#recordings-refresh").addEventListener("click", loadRecordingDates);
   $("#recordings-date").addEventListener("change", loadRecordings);
@@ -1327,22 +1498,16 @@ function bindControls() {
     }
   });
   $("#recording-download-btn").addEventListener("click", downloadActiveRecording);
-  $("#preset-goto").addEventListener("click", async () => {
-    const token = $("#preset-select").value;
-    if (!token) return;
-    try {
-      await queuePtz("/api/ptz/preset/goto", { token, speed: state.speed });
-      toast("Moving to preset");
-    } catch (error) {
-      showError(error);
-    }
-  });
+  $("#preset-goto").addEventListener("click", () =>
+    goToPreset($("#preset-select").value)
+  );
 
   $("#preset-save").addEventListener("click", async () => {
     const name = $("#preset-name").value.trim();
     try {
       await api("/api/ptz/preset/set", { method: "POST", body: { name } });
       $("#preset-name").value = "";
+      $("#preset-name").blur();
       await loadPresets();
       toast("Preset saved");
     } catch (error) {
@@ -1363,13 +1528,7 @@ function bindControls() {
     }
   });
 
-  $("#snapshot-btn").addEventListener("click", () => {
-    if (!state.status || !state.status.authenticated) {
-      openSetup();
-      return;
-    }
-    window.open(`/api/snapshot?t=${Date.now()}`, "_blank", "noopener");
-  });
+  $("#snapshot-btn").addEventListener("click", takeSnapshot);
 
   $("#sound-btn").addEventListener("click", () => {
     const video = $("#video");
@@ -1388,10 +1547,48 @@ function bindControls() {
     }
   });
 
+  $("#keys-btn").addEventListener("click", () => {
+    state.keyDebug = true;
+    $("#keys-modal").hidden = false;
+  });
+  $("#keys-close").addEventListener("click", () => {
+    $("#keys-modal").hidden = true;
+  });
+  $("#keys-modal").addEventListener("click", (event) => {
+    if (event.target === $("#keys-modal")) $("#keys-modal").hidden = true;
+  });
+
   const video = $("#video");
-  video.addEventListener("playing", () => setVideoStatus("", "hidden"));
-  video.addEventListener("waiting", () => setVideoStatus("Buffering..."));
-  video.addEventListener("stalled", () => setVideoStatus("Buffering..."));
+  const clearBuffering = () => {
+    clearTimeout(bufferingTimer);
+    bufferingTimer = null;
+    setVideoStatus("", "hidden");
+  };
+  // Only show the overlay for real stalls; a momentary gap should not flash
+  // "Buffering..." every time the camera handles a command.
+  const showBufferingSoon = () => {
+    if (bufferingTimer) return;
+    bufferingTimer = setTimeout(() => {
+      bufferingTimer = null;
+      if (video.readyState < 3) setVideoStatus("Buffering...");
+    }, 700);
+  };
+  video.addEventListener("playing", clearBuffering);
+  video.addEventListener("canplay", clearBuffering);
+  video.addEventListener("waiting", showBufferingSoon);
+  video.addEventListener("stalled", showBufferingSoon);
+  // Live view has no native controls, so a stray pause (media key, system
+  // sleep, browser quirk) looks exactly like a buffering stream. Resume it.
+  video.addEventListener("pause", () => {
+    if (
+      state.view === "live" &&
+      state.hls &&
+      state.status &&
+      state.status.authenticated
+    ) {
+      video.play().catch(() => {});
+    }
+  });
   video.addEventListener("dblclick", () => {
     state.digitalZoom = 1;
     applyDigitalZoom();
@@ -1410,6 +1607,7 @@ function bindControls() {
     }
   });
   window.addEventListener("blur", () => {
+    cancelTalkKeyHold();
     state.keysHeld.clear();
     stopAll();
     Object.keys(KEY_VECTORS).forEach((key) => {
@@ -1418,56 +1616,168 @@ function bindControls() {
     });
   });
 
+  // Diagnostic aid: click "Keys" in the top bar (or add ?keys to the URL) and
+  // every key event is shown in that panel and logged by the server.
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (!state.keyDebug) return;
+      const info = {
+        key: event.key,
+        code: event.code,
+        keyCode: event.keyCode,
+        resolved: shortcutKey(event),
+        target: describeNode(event.target),
+        active: describeNode(document.activeElement),
+        view: state.view,
+        setupOpen: !$("#setup-modal").hidden,
+        keysOpen: !$("#keys-modal").hidden,
+        secure: window.isSecureContext,
+        hasFocus: document.hasFocus(),
+        repeat: event.repeat,
+        ctrl: event.ctrlKey,
+        alt: event.altKey,
+        shift: event.shiftKey,
+        meta: event.metaKey,
+        trusted: event.isTrusted,
+      };
+      if (event.target instanceof HTMLInputElement && event.target.type === "password") {
+        info.key = "[redacted]";
+        info.code = "[redacted]";
+      }
+      const panel = $("#keys-last");
+      if (panel) panel.textContent = JSON.stringify(info, null, 2);
+      fetch("/api/__key?d=" + encodeURIComponent(JSON.stringify(info)), {
+        keepalive: true,
+      }).catch(() => {});
+    },
+    true
+  );
+
   window.addEventListener("keydown", (event) => {
     if (!$("#setup-modal").hidden || state.view !== "live") return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target;
     if (
       target instanceof Element &&
-      target.closest('input:not([type="range"]), select, textarea')
+      target.closest(
+        'input:not([type="range"]):not([type="button"]):not([type="submit"]), textarea, [contenteditable]:not([contenteditable="false"])'
+      )
     ) {
       return;
     }
+    const shortcut = shortcutKey(event);
+    const onSelect = target instanceof Element && Boolean(target.closest("select"));
+    // Let a focused select keep its own arrow/space/enter behaviour, but still
+    // allow letter and number shortcuts to work from it.
+    if (onSelect && (!shortcut || shortcut === "space")) return;
     if (event.repeat) return;
-    if (event.key === "+" || event.key === "=") {
+    if (
+      event.key === "+" ||
+      event.key === "=" ||
+      event.code === "Equal" ||
+      event.code === "NumpadAdd"
+    ) {
       event.preventDefault();
       zoomBy(ZOOM_STEP);
       return;
     }
-    if (event.key === "-" || event.key === "_") {
+    if (
+      event.key === "-" ||
+      event.key === "_" ||
+      event.code === "Minus" ||
+      event.code === "NumpadSubtract"
+    ) {
       event.preventDefault();
       zoomBy(-ZOOM_STEP);
       return;
     }
-    if (event.key === " ") {
-      event.preventDefault();
-      stopAll();
-      sendStop();
+    if (shortcut === "space") {
+      handleTalkKeyDown(event);
       return;
     }
-    if (event.key === "h" || event.key === "H") {
+    if (shortcut === "h") {
       event.preventDefault();
       goHome();
       return;
     }
-    if (KEY_VECTORS[event.key]) {
+    if (shortcut === "l") {
       event.preventDefault();
-      if (state.keysHeld.has(event.key)) return;
-      state.keysHeld.add(event.key);
-      const button = keyButton(event.key);
+      if (!lightAvailable()) {
+        toast(
+          "Add your Tapo account password in Settings to use the spotlight.",
+          "error"
+        );
+        return;
+      }
+      setSpotlight(!state.spotlightOn);
+      return;
+    }
+    if (shortcut === "d" || shortcut === "n" || shortcut === "a") {
+      event.preventDefault();
+      if (!lightAvailable()) {
+        toast(
+          "Add your Tapo account password in Settings to change night mode.",
+          "error"
+        );
+        return;
+      }
+      setNightMode(shortcut === "d" ? "off" : shortcut === "n" ? "on" : "auto");
+      return;
+    }
+    if (shortcut === "s") {
+      event.preventDefault();
+      takeSnapshot();
+      return;
+    }
+    if (/^\d$/.test(shortcut)) {
+      const index = shortcut === "0" ? 9 : Number(shortcut) - 1;
+      const preset = state.presets[index];
+      event.preventDefault();
+      if (!preset) {
+        toast(`No preset ${shortcut === "0" ? 10 : shortcut} saved`, "error");
+        return;
+      }
+      goToPreset(preset.token);
+      return;
+    }
+    const arrow = arrowKey(event);
+    if (arrow) {
+      event.preventDefault();
+      if (state.keysHeld.has(arrow)) return;
+      state.keysHeld.add(arrow);
+      const button = keyButton(arrow);
       if (button) button.classList.add("active");
       sendKeyMove();
     }
-  });
+  }, true);
 
   window.addEventListener("keyup", (event) => {
-    if (KEY_VECTORS[event.key] && state.keysHeld.has(event.key)) {
-      state.keysHeld.delete(event.key);
-      const button = keyButton(event.key);
+    if (shortcutKey(event) === "space") {
+      handleTalkKeyUp(event);
+      return;
+    }
+    const arrow = arrowKey(event);
+    if (arrow && state.keysHeld.has(arrow)) {
+      state.keysHeld.delete(arrow);
+      const button = keyButton(arrow);
       if (button) button.classList.remove("active");
       sendKeyMove();
     }
-  });
+  }, true);
+}
+
+function describeNode(node) {
+  if (!node) return null;
+  if (node === document) return "#document";
+  if (node === window) return "#window";
+  if (!(node instanceof Element)) return String(node);
+  const id = node.id ? `#${node.id}` : "";
+  const classes =
+    typeof node.className === "string" && node.className.trim()
+      ? "." + node.className.trim().split(/\s+/).join(".")
+      : "";
+  return `${node.tagName.toLowerCase()}${id}${classes}`;
 }
 
 async function init() {

@@ -198,6 +198,22 @@ Playback is remuxed live from the camera's local playback stream into HLS, so it
 - **Download clip** runs as a background MP4 job with progress in the panel. When it finishes, the browser download starts automatically. Downloads run one at a time and are cached on the server for up to 6 hours, or until you disconnect.
 - The UI waits for an active download to finish before starting a new playback.
 
+## Keyboard shortcuts
+
+The shortcuts work in **Live view** while no text field or dialog has focus. Click **Keys** in the top bar to see this list in the app; while that panel is open it also shows exactly what the browser reports for each key press (useful when a keyboard layout or remote desktop swallows shortcuts).
+
+| Keys | Action |
+| --- | --- |
+| Arrow keys | Pan / tilt (hold to keep moving) |
+| `+` / `-` | Digital zoom in / out |
+| `H` | Move to the home position |
+| `Space` (hold) | Push-to-talk: talk through the camera only while held |
+| `Space` (tap) | Toggle the call on or off |
+| `L` | Toggle the spotlight |
+| `D` / `A` / `N` | Night mode: Day / Auto / Night |
+| `1`–`9`, `0` | Go to preset 1–10 |
+| `S` | Take a snapshot |
+
 ## Notes
 
 - The camera account password and the Tapo account password are different. The spotlight, day/night and SD card recording controls require the Tapo account password (the one you sign in to the Tapo app with), not the camera account password.

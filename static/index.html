@@ -21,6 +21,7 @@
       <button class="ghost" id="call-btn" type="button" disabled>Call</button>
       <button class="ghost" id="snapshot-btn" type="button">Snapshot</button>
       <button class="ghost" id="fullscreen-btn" type="button">Fullscreen</button>
+      <button class="ghost" id="keys-btn" type="button">Keys</button>
       <button class="ghost" id="settings-btn" type="button">Settings</button>
     </div>
   </header>
@@ -39,7 +40,7 @@
             <div class="spinner"></div>
             <span id="video-status">Connecting to stream...</span>
           </div>
-          <div class="video-hint">Hold a control to move · arrow keys work too</div>
+          <div class="video-hint">Hold a control to move · arrows to pan/tilt · Space to talk</div>
         </div>
       </div>
 
@@ -190,6 +191,28 @@
       </aside>
     </section>
   </main>
+
+  <div class="modal-backdrop" id="keys-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="keys-title">
+      <h2 id="keys-title">Keyboard shortcuts</h2>
+      <dl class="shortcut-list">
+        <div><dt><kbd>Space</kbd> tap</dt><dd>Start or end a call</dd></div>
+        <div><dt><kbd>Space</kbd> hold</dt><dd>Push to talk while held</dd></div>
+        <div><dt><kbd>L</kbd></dt><dd>Toggle the spotlight</dd></div>
+        <div><dt><kbd>D</kbd> / <kbd>A</kbd> / <kbd>N</kbd></dt><dd>Day / Auto / Night mode</dd></div>
+        <div><dt><kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd></dt><dd>Go to saved preset 1–10</dd></div>
+        <div><dt><kbd>S</kbd></dt><dd>Take a snapshot</dd></div>
+        <div><dt><kbd>H</kbd></dt><dd>Move to the home position</dd></div>
+        <div><dt>Arrows</dt><dd>Pan and tilt</dd></div>
+        <div><dt><kbd>+</kbd> / <kbd>−</kbd></dt><dd>Digital zoom</dd></div>
+      </dl>
+      <p class="hint">Shortcuts work in Live view unless you are typing in a field. Press a key now to see exactly what the browser reports.</p>
+      <pre class="keys-last" id="keys-last">No key seen yet.</pre>
+      <div class="modal-actions">
+        <button class="ghost" type="button" id="keys-close">Close</button>
+      </div>
+    </div>
+  </div>
 
   <div class="modal-backdrop" id="setup-modal" hidden>
     <form class="modal" id="setup-form" autocomplete="off">
