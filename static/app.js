@@ -26,6 +26,7 @@ const state = {
   recordingPollToken: 0,
   activeRecording: null,
   liveStopped: false,
+  autoConnecting: false,
   view: "live",
   keysHeld: new Set(),
   activeMoves: new Set(),
@@ -1155,6 +1156,47 @@ function closeSetup() {
   $("#setup-modal").hidden = true;
 }
 
+function showSetupError(message) {
+  const element = $("#setup-error");
+  element.textContent = message || "";
+  element.hidden = !message;
+}
+
+// The server retries the credentials from the environment in the background,
+// so the page can be opened before the camera is reachable. Keep showing the
+// connecting state instead of asking for credentials that were already
+// supplied, and finish the setup once the connection succeeds.
+function syncAutoConnect(previous, status) {
+  const wasAuthenticated = Boolean(previous && previous.authenticated);
+  if (status.authenticated && !wasAuthenticated) {
+    if (!state.autoConnecting) return; // A manual login already finished setup.
+    state.autoConnecting = false;
+    state.liveStopped = false;
+    closeSetup();
+    startVideo();
+    loadPresets();
+    toast("Connected to camera");
+    return;
+  }
+  if (status.authenticated) return;
+  if (status.auto_connect_pending) {
+    state.autoConnecting = true;
+    state.liveStopped = false;
+    setVideoStatus(
+      status.auto_connect_error
+        ? "Camera unreachable, retrying..."
+        : "Connecting to camera..."
+    );
+    return;
+  }
+  if (state.autoConnecting) {
+    // Auto-connect gave up (for example, wrong credentials): ask for them.
+    state.autoConnecting = false;
+    openSetup();
+    showSetupError(status.auto_connect_error);
+  }
+}
+
 function stopHls() {
   if (state.hls) {
     try {
@@ -1435,6 +1477,7 @@ function bindControls() {
     try {
       const status = await api("/api/session", { method: "POST", body });
       applyStatus(status);
+      state.autoConnecting = false;
       state.liveStopped = false;
       closeSetup();
       form.elements.password.value = "";
@@ -1789,8 +1832,11 @@ async function init() {
       state.liveStopped = false;
       startVideo();
       loadPresets();
+    } else if (status.auto_connect_pending) {
+      syncAutoConnect(null, status);
     } else {
       openSetup();
+      showSetupError(status.auto_connect_error);
     }
   } catch (error) {
     showError(error);
@@ -1798,9 +1844,11 @@ async function init() {
   }
 
   setInterval(async () => {
+    const previous = state.status;
     try {
       const status = await api("/api/status");
       applyStatus(status);
+      syncAutoConnect(previous, status);
     } catch (error) {}
   }, 5000);
 }

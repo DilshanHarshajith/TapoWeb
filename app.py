@@ -27,9 +27,15 @@ from tapo_api import TapoError, TapoLight
 DEFAULT_HOST = ""
 DEFAULT_ONVIF_PORT = 2020
 DEFAULT_RTSP_PORT = 554
+AUTO_CONNECT_RETRY_MIN = 2.0
+AUTO_CONNECT_RETRY_MAX = 60.0
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 state_lock = threading.RLock()
+auto_connect_lock = threading.Lock()
+auto_connect_stop = threading.Event()
+auto_connect_state = {"pending": False, "error": None}
+_UNSET = object()
 controller = None
 credentials = None
 light_controller = None
@@ -160,6 +166,9 @@ def current_status():
         creds = credentials
         has_cloud_password = bool(creds and creds.get("cloud_password"))
         talk = talk_session
+    with auto_connect_lock:
+        auto_pending = auto_connect_state["pending"]
+        auto_error = auto_connect_state["error"]
     talk_active = talk is not None and talk.active
     if cam is None:
         return {
@@ -168,6 +177,8 @@ def current_status():
             "stream_running": stream_manager.is_running(),
             "has_cloud_password": has_cloud_password,
             "talk_active": talk_active,
+            "auto_connect_pending": auto_pending,
+            "auto_connect_error": auto_error,
         }
     return {
         "authenticated": True,
@@ -180,6 +191,8 @@ def current_status():
         "max_hold": CameraController.MAX_HOLD_SECONDS,
         "has_cloud_password": has_cloud_password,
         "talk_active": talk_active,
+        "auto_connect_pending": auto_pending,
+        "auto_connect_error": auto_error,
     }
 
 
@@ -218,6 +231,10 @@ def status():
 @app.post("/api/session")
 def create_session():
     global controller, credentials, light_controller, recording_service
+    # A manual login supersedes the environment auto-connect, which may still
+    # be waiting for the camera to appear on the network.
+    auto_connect_stop.set()
+    _update_auto_connect_state(pending=False, error=None)
     data = request.get_json(silent=True) or {}
     host = str(data.get("host") or DEFAULT_HOST).strip()
     if not host:
@@ -708,42 +725,132 @@ def hls(filename):
     return response
 
 
-def auto_connect_from_env():
-    global controller, credentials, light_controller, recording_service
-    user = os.environ.get("TAPO_USER")
-    password = os.environ.get("TAPO_PASS")
+def _update_auto_connect_state(pending=_UNSET, error=_UNSET):
+    with auto_connect_lock:
+        if pending is not _UNSET:
+            auto_connect_state["pending"] = pending
+        if error is not _UNSET:
+            auto_connect_state["error"] = error
+
+
+def _env_connection():
+    user = (os.environ.get("TAPO_USER") or "").strip()
+    password = os.environ.get("TAPO_PASS") or ""
     if not user or not password:
-        return
-    host = os.environ.get("TAPO_HOST", DEFAULT_HOST)
+        return None
+    host = (os.environ.get("TAPO_HOST") or "").strip()
     if not host:
         print("Auto-connect skipped: set TAPO_HOST to the camera address")
-        return
-    onvif_port = int(os.environ.get("TAPO_PORT", DEFAULT_ONVIF_PORT))
+        return None
+    try:
+        onvif_port = int(os.environ.get("TAPO_PORT", DEFAULT_ONVIF_PORT))
+    except (TypeError, ValueError):
+        print("Auto-connect skipped: TAPO_PORT must be a number")
+        return None
     stream = os.environ.get("TAPO_STREAM", "stream1")
-    cloud_password = (os.environ.get("TAPO_CLOUD_PASS", "") or "").strip()
     if stream not in ("stream1", "stream2"):
         stream = "stream1"
-    try:
-        cam = CameraController(host, onvif_port, user, password)
-    except CameraError as exc:
-        print(f"Auto-connect failed: {exc}")
-        return
-    controller = cam
-    light_controller = TapoLight(host, cloud_password) if cloud_password else None
-    recording_service = RecordingService(host, cloud_password) if cloud_password else None
-    credentials = {
+    return {
         "host": host,
         "port": onvif_port,
         "user": user,
         "password": password,
-        "cloud_password": cloud_password,
+        "cloud_password": (os.environ.get("TAPO_CLOUD_PASS", "") or "").strip(),
         "stream": stream,
     }
-    stream_manager.start(
-        rtsp_url(host, DEFAULT_RTSP_PORT, user, password, stream), stream
-    )
-    device = cam.device()
-    print(f"Connected to {device.get('manufacturer', '')} {device.get('model', '')}".strip())
+
+
+def start_auto_connect():
+    """Connect using the TAPO_* environment, retrying in the background.
+
+    A container started at boot can easily win the race against the network or
+    the camera coming online. A single failed attempt used to leave the app with
+    no credentials even though they were supplied through the environment, so
+    the UI asked for them again after every reboot.
+    """
+    creds = _env_connection()
+    if creds is None:
+        return
+    _update_auto_connect_state(pending=True, error=None)
+    threading.Thread(
+        target=_auto_connect_worker,
+        args=(creds,),
+        name="auto-connect",
+        daemon=True,
+    ).start()
+
+
+def _auto_connect_worker(creds):
+    global controller, credentials, light_controller, recording_service
+    delay = AUTO_CONNECT_RETRY_MIN
+    attempt = 0
+    while not auto_connect_stop.is_set():
+        attempt += 1
+        try:
+            cam = CameraController(
+                creds["host"], creds["port"], creds["user"], creds["password"]
+            )
+        except CameraError as exc:
+            message = str(exc)
+            with state_lock:
+                manual_session = credentials is not None
+            if manual_session or auto_connect_stop.is_set():
+                _update_auto_connect_state(pending=False, error=None)
+                return
+            if message == "Wrong camera username or password":
+                # Retrying cannot help and could lock the camera account.
+                _update_auto_connect_state(pending=False, error=message)
+                print(
+                    f"Auto-connect failed: {message}. "
+                    "Check TAPO_USER and TAPO_PASS."
+                )
+                return
+            _update_auto_connect_state(error=message)
+            print(
+                f"Auto-connect attempt {attempt} failed: {message}; "
+                f"retrying in {delay:g}s"
+            )
+            if auto_connect_stop.wait(delay):
+                return
+            delay = min(AUTO_CONNECT_RETRY_MAX, delay * 2)
+            continue
+
+        has_cloud_password = bool(creds["cloud_password"])
+        light = (
+            TapoLight(creds["host"], creds["cloud_password"])
+            if has_cloud_password
+            else None
+        )
+        recordings = (
+            RecordingService(creds["host"], creds["cloud_password"])
+            if has_cloud_password
+            else None
+        )
+        with state_lock:
+            if credentials is not None or auto_connect_stop.is_set():
+                # A session was opened from the UI while we were connecting.
+                _update_auto_connect_state(pending=False, error=None)
+                return
+            controller = cam
+            light_controller = light
+            recording_service = recordings
+            credentials = dict(creds)
+        stream_manager.start(
+            rtsp_url(
+                creds["host"],
+                DEFAULT_RTSP_PORT,
+                creds["user"],
+                creds["password"],
+                creds["stream"],
+            ),
+            creds["stream"],
+        )
+        device = cam.device()
+        manufacturer = str(device.get("manufacturer", "") or "")
+        model = str(device.get("model", "") or "")
+        _update_auto_connect_state(pending=False, error=None)
+        print(f"Connected to {manufacturer} {model}".strip())
+        return
 
 
 def main():
@@ -759,7 +866,8 @@ def main():
     if shutil.which("ffmpeg") is None:
         print("ffmpeg was not found in PATH; the live view will not work")
 
-    auto_connect_from_env()
+    start_auto_connect()
+    atexit.register(auto_connect_stop.set)
     atexit.register(stream_manager.stop)
     atexit.register(close_talk)
     atexit.register(close_recordings)

@@ -49,6 +49,8 @@ TAPO_CLOUD_PASS=tapo-account-pass
 
 You can also leave these blank and enter the details in the Settings dialog after the app starts. Note that credentials entered in the UI live in memory only, so they are lost whenever the container restarts — use `.env` for a persistent setup.
 
+When the credentials come from `.env`, the app keeps trying in the background if the camera is not reachable yet (for example right after a reboot, when the container can start before the network or camera is online). The UI shows a connecting/retrying state and opens the camera automatically once the connection succeeds. Retries stop only if the camera rejects the username or password; those are shown in the logs and in the Settings dialog.
+
 ### 2. Start the container
 
 ```bash
