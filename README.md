@@ -1,6 +1,6 @@
 # TapoWeb
 
-A small web UI for controlling a TP-Link Tapo camera (developed against the C520WS PTZ model). It gives you a live HLS stream, pan/tilt/zoom controls, presets, snapshots, SD card recording playback and downloads, and — with your Tapo account password — spotlight and day/night control.
+A small web UI for controlling a TP-Link Tapo camera (developed against the C520WS PTZ model). It gives you a live HLS stream, pan/tilt/zoom controls, presets, snapshots, manual recording of the live stream, SD card recording playback and downloads, and — with your Tapo account password — spotlight and day/night control.
 
 The app talks to the camera directly on your local network. Credentials are kept in memory only and are never written to disk.
 
@@ -12,6 +12,7 @@ The app talks to the camera directly on your local network. Credentials are kept
 - Pan/tilt with on-screen D-pad and arrow keys, speed slider
 - Presets: save, go to, delete
 - JPEG snapshots
+- Manual recording of the live stream, saved to this PC, the server library, or both
 - Digital zoom and fullscreen
 - Spotlight toggle and day/night mode via the Tapo local API
 - SD card recordings: browse clips by date, stream them directly, and download them as MP4
@@ -88,6 +89,7 @@ docker compose down          # stop and remove the container
 | `TAPO_PORT` | `2020` | ONVIF port |
 | `TAPO_STREAM` | `stream1` | `stream1` (HD) or `stream2` (SD) |
 | `TAPO_CLOUD_PASS` | – | Tapo account password for spotlight, night mode and SD card recordings |
+| `TAPO_RECORDINGS_DIR` | `/app/manual-recordings` | Folder for Live-tab manual recordings; Compose mounts a persistent volume here |
 
 The image also sets `TAPO_WEB_HOST=0.0.0.0` and `TAPO_WEB_PORT=8080` internally. The same environment variables work with a plain `docker run`:
 
@@ -98,6 +100,7 @@ docker run -d \
   --name tapoweb \
   --restart unless-stopped \
   -p 8080:8080 \
+  -v tapoweb-recordings:/app/manual-recordings \
   -e TAPO_HOST=192.168.1.100 \
   -e TAPO_USER=camera-user \
   -e TAPO_PASS=camera-pass \
@@ -200,6 +203,29 @@ Playback is remuxed live from the camera's local playback stream into HLS, so it
 - **Download clip** runs as a background MP4 job with progress in the panel. When it finishes, the browser download starts automatically. Downloads run one at a time and are cached on the server for up to 6 hours, or until you disconnect.
 - The UI waits for an active download to finish before starting a new playback.
 
+## Manual recording
+
+The **Live view** tab can record the live RTSP stream to an MP4 on the server. The camera's local API does not expose manual SD-card recording, so TapoWeb records the stream itself with ffmpeg.
+
+1. In **Live view**, choose a destination under **Save to**: **This PC**, **Server library**, or **Both**.
+2. Press **Start recording** (or `R`). A REC badge and elapsed timer appear over the video.
+3. Press **Stop recording** (or `R`) to finish the MP4. The clip then appears in the manual recordings list below the controls.
+
+Destination behavior:
+
+- **This PC** downloads the MP4 to your browser when the recording finishes. The server copy is temporary and is deleted after 6 hours.
+- **Server library** keeps the clip on the server until you delete it. Use **Download** in the list at any time.
+- **Both** downloads the clip and keeps it in the server library.
+
+A few things to know:
+
+- Only one manual recording runs at a time. Stopping takes a moment because ffmpeg remuxes the stream to a playable MP4.
+- Recording stops automatically when you disconnect, open a new session, switch stream quality, or leave **Live view**.
+- The recording uses its own RTSP connection in addition to the live view, and the camera limits how many simultaneous streams it serves.
+- Files are written to `TAPO_RECORDINGS_DIR` (default: a `manual-recordings/` folder next to `app.py`). The provided Compose file mounts a persistent volume at `/app/manual-recordings`, so the server library is restored after a restart. Download-only clips still expire after 6 hours.
+- Each clip has a small `.json` sidecar with its metadata. Removing files outside the app does not break the list; missing files are dropped on the next refresh.
+- Manual recording needs `ffmpeg` and `ffprobe` in `PATH`; the Docker image includes both.
+
 ## Keyboard shortcuts
 
 The shortcuts work in **Live view** while no text field or dialog has focus. Click **Keys** in the top bar to see this list in the app; while that panel is open it also shows exactly what the browser reports for each key press (useful when a keyboard layout or remote desktop swallows shortcuts).
@@ -215,6 +241,7 @@ The shortcuts work in **Live view** while no text field or dialog has focus. Cli
 | `D` / `A` / `N` | Night mode: Day / Auto / Night |
 | `1`–`9`, `0` | Go to preset 1–10 |
 | `S` | Take a snapshot |
+| `R` | Start or stop manual recording |
 
 ## Notes
 
@@ -223,6 +250,7 @@ The shortcuts work in **Live view** while no text field or dialog has focus. Cli
 - If spotlight/night mode or recordings report a wrong password, double-check the Tapo account password (no leading/trailing spaces) and that the camera's local API is not temporarily locked after repeated failed attempts.
 - Repeated wrong Tapo passwords can lock the camera's local API for about 30 minutes.
 - The live view is also transcoded to HLS on the fly by ffmpeg. If `ffmpeg` is missing, the UI loads but video will not play. The Docker image includes it.
+- Manual recordings are written as MPEG-TS while recording, then remuxed to MP4 when stopped. A crash during recording may leave a temporary `.ts` file in the recordings folder.
 - Credentials live in server memory for the lifetime of the process.
 - HLS segments are written to a temporary directory inside the container and cleaned up automatically.
 
@@ -232,6 +260,7 @@ The shortcuts work in **Live view** while no text field or dialog has focus. Cli
 app.py           Flask app and HTTP API
 camera.py        ONVIF camera and PTZ controls
 stream.py        ffmpeg HLS stream manager
+manual_recordings.py  Live-stream manual recording manager
 recordings.py    SD card recording browser, download and HLS playback manager
 tapo_api.py      Tapo local API for spotlight / night mode
 static/          Frontend (HTML, CSS, JS, hls.js)

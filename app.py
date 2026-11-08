@@ -14,6 +14,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from werkzeug.exceptions import NotFound
 
 from camera import CameraController, CameraError
+from manual_recordings import ManualRecordingError, ManualRecordingManager
 from recordings import (
     RecordingDownloadManager,
     RecordingError,
@@ -44,6 +45,7 @@ recording_downloads = None
 recording_streams = None
 talk_session = None
 stream_manager = StreamManager()
+manual_recordings = ManualRecordingManager()
 
 
 def rtsp_url(host, port, user, password, stream):
@@ -170,6 +172,7 @@ def current_status():
         auto_pending = auto_connect_state["pending"]
         auto_error = auto_connect_state["error"]
     talk_active = talk is not None and talk.active
+    manual_recording = manual_recordings.active()
     if cam is None:
         return {
             "authenticated": False,
@@ -179,6 +182,7 @@ def current_status():
             "talk_active": talk_active,
             "auto_connect_pending": auto_pending,
             "auto_connect_error": auto_error,
+            "manual_recording": manual_recording,
         }
     return {
         "authenticated": True,
@@ -193,6 +197,7 @@ def current_status():
         "talk_active": talk_active,
         "auto_connect_pending": auto_pending,
         "auto_connect_error": auto_error,
+        "manual_recording": manual_recording,
     }
 
 
@@ -282,6 +287,7 @@ def create_session():
     url = rtsp_url(host, DEFAULT_RTSP_PORT, user, password, stream)
     close_talk()
     close_recordings()
+    manual_recordings.stop()
     with state_lock:
         old_controller = controller
         controller = new_controller
@@ -311,6 +317,7 @@ def delete_session():
         light_controller = None
     close_talk()
     close_recordings()
+    manual_recordings.stop()
     if old_controller is not None:
         old_controller.stop()
     stream_manager.stop()
@@ -328,6 +335,7 @@ def switch_stream():
     if creds is None:
         return jsonify(error="Not connected to the camera"), 401
     url = rtsp_url(creds["host"], DEFAULT_RTSP_PORT, creds["user"], creds["password"], stream)
+    manual_recordings.stop()
     stream_manager.start(url, stream)
     with state_lock:
         credentials["stream"] = stream
@@ -619,6 +627,76 @@ def recording_stream_segment(stream_id, filename):
     return response
 
 
+@app.get("/api/manual-recordings")
+def manual_recordings_list():
+    return jsonify(manual_recordings.snapshot())
+
+
+@app.post("/api/manual-recordings")
+def manual_recordings_start():
+    data = request.get_json(silent=True) or {}
+    with state_lock:
+        creds = dict(credentials) if credentials else None
+    if creds is None:
+        return jsonify(error="Not connected to the camera"), 401
+    url = rtsp_url(
+        creds["host"],
+        DEFAULT_RTSP_PORT,
+        creds["user"],
+        creds["password"],
+        creds["stream"],
+    )
+    try:
+        record = manual_recordings.start(url, data.get("destination"))
+    except ManualRecordingError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(record), 202
+
+
+@app.delete("/api/manual-recordings")
+def manual_recordings_stop():
+    record = manual_recordings.stop()
+    if record is None:
+        return jsonify(error="No recording is in progress"), 404
+    return jsonify(record), 202
+
+
+@app.get("/api/manual-recordings/<record_id>")
+def manual_recording_status(record_id):
+    record = manual_recordings.get(record_id)
+    if record is None:
+        return jsonify(error="Recording not found"), 404
+    return jsonify(record)
+
+
+@app.get("/api/manual-recordings/<record_id>/file")
+def manual_recording_file(record_id):
+    record = manual_recordings.get(record_id)
+    path = manual_recordings.path(record_id)
+    if record is None or path is None:
+        return jsonify(error="Recording is not ready"), 404
+    as_attachment = request.args.get("download") in ("1", "true", "yes")
+    return send_file(
+        path,
+        mimetype="video/mp4",
+        conditional=True,
+        as_attachment=as_attachment,
+        download_name=record["fileName"],
+        max_age=0,
+    )
+
+
+@app.delete("/api/manual-recordings/<record_id>")
+def manual_recording_delete(record_id):
+    try:
+        deleted = manual_recordings.delete(record_id)
+    except ManualRecordingError as exc:
+        return jsonify(error=str(exc)), 409
+    if not deleted:
+        return jsonify(error="Recording not found"), 404
+    return jsonify(ok=True)
+
+
 @app.post("/api/talk/start")
 def talk_start():
     global talk_session
@@ -871,6 +949,7 @@ def main():
     atexit.register(stream_manager.stop)
     atexit.register(close_talk)
     atexit.register(close_recordings)
+    atexit.register(manual_recordings.close)
     print(f"Tapo web UI: http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, threaded=True, debug=False)
 

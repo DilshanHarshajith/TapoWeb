@@ -25,6 +25,14 @@ const state = {
   recordingHls: null,
   recordingPollToken: 0,
   activeRecording: null,
+  manualRecording: null,
+  manualRecordings: [],
+  manualDestination: "download",
+  manualPollTimer: null,
+  manualPendingDownload: null,
+  manualBusy: false,
+  manualObservedIds: new Set(),
+  manualSeenFailures: new Set(),
   liveStopped: false,
   autoConnecting: false,
   view: "live",
@@ -149,6 +157,7 @@ function applyStatus(status) {
   }
   updateLightAvailability(status);
   updateRecordingsAvailability(status);
+  syncManualRecordingStatus(status);
   if (!status.authenticated && state.talkActive) {
     stopTalk({ silent: true });
   }
@@ -657,6 +666,7 @@ async function switchView(view) {
   if (view !== "live") {
     cancelTalkKeyHold();
     if (state.talkActive) stopTalk({ silent: true });
+    if (manualRecordingStoppable()) stopManualRecording({ quiet: true });
   }
 
   if (view === "live") {
@@ -716,6 +726,300 @@ function formatRecordingDuration(seconds) {
   if (hours) return `${hours}h ${minutes}m`;
   if (minutes) return `${minutes}m ${secs}s`;
   return `${secs}s`;
+}
+
+const MANUAL_DESTINATION_LABELS = {
+  download: "This PC",
+  server: "Server library",
+  both: "PC + server",
+};
+
+function manualRecordingActive(record = state.manualRecording) {
+  return Boolean(
+    record &&
+      ["starting", "recording", "stopping", "finalizing"].includes(record.state)
+  );
+}
+
+function manualRecordingStoppable(record = state.manualRecording) {
+  return Boolean(
+    record && (record.state === "starting" || record.state === "recording")
+  );
+}
+
+function manualRecordingClock(record = state.manualRecording) {
+  if (!record) return "00:00";
+  const start = Number(record.startedAt) || Date.now() / 1000;
+  const end = record.endedAt ? Number(record.endedAt) : Date.now() / 1000;
+  const total = Math.max(0, Math.floor(end - start));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const pad = (value) => String(value).padStart(2, "0");
+  return hours
+    ? `${hours}:${pad(minutes)}:${pad(secs)}`
+    : `${pad(minutes)}:${pad(secs)}`;
+}
+
+function formatFileSize(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let size = bytes / 1024;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size >= 10 ? size.toFixed(0) : size.toFixed(1)} ${
+    units[index]
+  }`;
+}
+
+function formatManualDate(timestamp) {
+  const date = new Date(Number(timestamp) * 1000);
+  if (Number.isNaN(date.getTime())) return "Unknown time";
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function renderManualRecording() {
+  const record = state.manualRecording;
+  const active = manualRecordingActive(record);
+  const stoppable = manualRecordingStoppable(record);
+  const badge = $("#rec-badge");
+  badge.hidden = !active;
+
+  let stateLabel = "Idle";
+  if (stoppable) {
+    stateLabel = record.state === "starting" ? "Starting" : "Recording";
+  } else if (active) {
+    stateLabel = "Saving";
+  }
+  $("#manual-rec-state").textContent = stateLabel;
+  $("#rec-badge-label").textContent =
+    record && record.state === "recording" ? "REC" : "REC …";
+  $("#rec-badge").classList.toggle("saving", active && !stoppable);
+
+  const clock = active ? manualRecordingClock(record) : "00:00";
+  $("#manual-rec-clock").textContent = clock;
+  $("#rec-badge-clock").textContent = clock;
+
+  const button = $("#manual-rec-toggle");
+  $("#manual-rec-label").textContent = stoppable
+    ? "Stop recording"
+    : active
+      ? "Saving..."
+      : "Start recording";
+  button.classList.toggle("recording", stoppable);
+  button.disabled = state.manualBusy || (active && !stoppable);
+
+  $("#manual-destination").disabled = active || state.manualBusy;
+
+  const hint = $("#manual-rec-hint");
+  if (stoppable) {
+    const label =
+      MANUAL_DESTINATION_LABELS[record.destination] || "the server";
+    hint.textContent = `Recording on the server · ${label}. Press R or Stop to finish the MP4.`;
+  } else if (active) {
+    hint.textContent = "Finishing the MP4. The clip appears below when it is ready.";
+  } else {
+    hint.textContent =
+      "Records the live stream on the server. Download-only clips are removed after 6 hours.";
+  }
+}
+
+function renderManualRecordingList() {
+  const list = $("#manual-rec-list");
+  list.innerHTML = "";
+  if (!state.manualRecordings.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "No saved recordings yet.";
+    list.append(empty);
+    return;
+  }
+  for (const record of state.manualRecordings) {
+    const row = document.createElement("div");
+    row.className = "recording-item manual-rec-item";
+    row.dataset.id = record.id;
+
+    const info = document.createElement("div");
+    info.className = "recording-info";
+    const time = document.createElement("span");
+    time.className = "recording-time";
+    time.textContent = formatManualDate(record.createdAt);
+    const meta = document.createElement("span");
+    meta.className = "recording-meta";
+    const destination =
+      MANUAL_DESTINATION_LABELS[record.destination] || record.destination;
+    const expiry = record.keep ? "" : " · temporary";
+    meta.textContent = `${formatRecordingDuration(
+      record.duration
+    )} · ${formatFileSize(record.size)} · ${destination}${expiry}`;
+    info.append(time, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "recording-actions";
+    for (const [action, label] of [
+      ["download", "Download"],
+      ["delete", "Delete"],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ghost small";
+      button.dataset.action = action;
+      button.textContent = label;
+      actions.append(button);
+    }
+
+    row.append(info, actions);
+    list.append(row);
+  }
+}
+
+function applyManualSnapshot(data) {
+  const previous = state.manualRecording;
+  if (previous) state.manualObservedIds.add(previous.id);
+  state.manualRecording = (data && data.active) || null;
+  if (state.manualRecording) state.manualObservedIds.add(state.manualRecording.id);
+  state.manualRecordings = (data && data.recordings) || [];
+  for (const failure of (data && data.failures) || []) {
+    if (
+      !state.manualObservedIds.has(failure.id) ||
+      state.manualSeenFailures.has(failure.id)
+    ) {
+      continue;
+    }
+    state.manualSeenFailures.add(failure.id);
+    toast(failure.error || "Manual recording failed", "error");
+  }
+  renderManualRecording();
+  renderManualRecordingList();
+  if (manualRecordingActive()) {
+    scheduleManualPoll();
+  } else {
+    clearTimeout(state.manualPollTimer);
+    state.manualPollTimer = null;
+  }
+  maybeFinishManualDownload();
+}
+
+function scheduleManualPoll() {
+  if (state.manualPollTimer) return;
+  state.manualPollTimer = setTimeout(async () => {
+    state.manualPollTimer = null;
+    await refreshManualRecording();
+  }, 1200);
+}
+
+async function refreshManualRecording() {
+  try {
+    const data = await api("/api/manual-recordings");
+    applyManualSnapshot(data);
+  } catch (error) {
+    if (manualRecordingActive()) scheduleManualPoll();
+  }
+}
+
+function maybeFinishManualDownload() {
+  const id = state.manualPendingDownload;
+  if (!id) return;
+  const record = state.manualRecordings.find((item) => item.id === id);
+  if (!record) return;
+  state.manualPendingDownload = null;
+  triggerDownload(`/api/manual-recordings/${id}/file?download=1`);
+  toast("Recording saved and downloaded");
+}
+
+async function startManualRecording() {
+  if (state.manualBusy || manualRecordingActive()) return;
+  if (!state.status || !state.status.authenticated) {
+    openSetup();
+    return;
+  }
+  const destination = $("#manual-destination").value || "download";
+  state.manualDestination = destination;
+  state.manualBusy = true;
+  renderManualRecording();
+  try {
+    const record = await api("/api/manual-recordings", {
+      method: "POST",
+      body: { destination },
+    });
+    state.manualObservedIds.add(record.id);
+    if (destination !== "server") {
+      state.manualPendingDownload = record.id;
+    }
+    toast(
+      destination === "server"
+        ? "Recording started on the server"
+        : "Recording started · it will download when you stop"
+    );
+    await refreshManualRecording();
+  } catch (error) {
+    showError(error);
+  } finally {
+    state.manualBusy = false;
+    renderManualRecording();
+  }
+}
+
+async function stopManualRecording({ quiet = false } = {}) {
+  if (state.manualBusy || !manualRecordingStoppable()) return;
+  state.manualBusy = true;
+  renderManualRecording();
+  try {
+    await api("/api/manual-recordings", { method: "DELETE" });
+    if (!quiet) toast("Finishing the recording...");
+    await refreshManualRecording();
+  } catch (error) {
+    if (!quiet) showError(error);
+  } finally {
+    state.manualBusy = false;
+    renderManualRecording();
+  }
+}
+
+function toggleManualRecording() {
+  if (manualRecordingStoppable()) {
+    stopManualRecording();
+  } else if (!manualRecordingActive()) {
+    startManualRecording();
+  }
+}
+
+function syncManualRecordingStatus(status) {
+  const record = (status && status.manual_recording) || null;
+  if (record) {
+    state.manualRecording = record;
+    renderManualRecording();
+    if (manualRecordingActive()) scheduleManualPoll();
+  } else if (state.manualRecording) {
+    state.manualRecording = null;
+    renderManualRecording();
+    refreshManualRecording();
+  }
+}
+
+async function loadManualRecordings() {
+  await refreshManualRecording();
+}
+
+async function deleteManualRecording(id) {
+  if (!id) return;
+  if (!window.confirm("Delete this recording from the server?")) return;
+  try {
+    await api(`/api/manual-recordings/${id}`, { method: "DELETE" });
+    toast("Recording deleted");
+    await refreshManualRecording();
+  } catch (error) {
+    showError(error);
+  }
 }
 
 async function loadRecordingDates() {
@@ -1459,6 +1763,32 @@ function bindControls() {
     }
   });
 
+  $("#manual-rec-toggle").addEventListener("click", toggleManualRecording);
+  $("#manual-destination").value = state.manualDestination;
+  $("#manual-destination").addEventListener("change", (event) => {
+    state.manualDestination = event.target.value;
+    event.target.blur();
+  });
+  $("#manual-rec-list").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+    const row = button.closest(".manual-rec-item");
+    if (!row) return;
+    if (button.dataset.action === "download") {
+      triggerDownload(
+        `/api/manual-recordings/${row.dataset.id}/file?download=1`
+      );
+    } else {
+      deleteManualRecording(row.dataset.id);
+    }
+  });
+  setInterval(() => {
+    if (!manualRecordingActive()) return;
+    const clock = manualRecordingClock();
+    $("#manual-rec-clock").textContent = clock;
+    $("#rec-badge-clock").textContent = clock;
+  }, 1000);
+
   $("#setup-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1485,6 +1815,7 @@ function bindControls() {
       startVideo();
       loadPresets();
       resetRecordingState();
+      loadManualRecordings();
       if (state.view === "recordings" && status.has_cloud_password) {
         loadRecordingDates();
       }
@@ -1514,6 +1845,7 @@ function bindControls() {
       state.status = status;
       applyStatus(status);
       await stopRecordingPlayback();
+      loadManualRecordings();
       openSetup();
       toast("Disconnected");
     } catch (error) {
@@ -1773,6 +2105,11 @@ function bindControls() {
       takeSnapshot();
       return;
     }
+    if (shortcut === "r") {
+      event.preventDefault();
+      toggleManualRecording();
+      return;
+    }
     if (/^\d$/.test(shortcut)) {
       const index = shortcut === "0" ? 9 : Number(shortcut) - 1;
       const preset = state.presets[index];
@@ -1842,6 +2179,8 @@ async function init() {
     showError(error);
     openSetup();
   }
+
+  loadManualRecordings();
 
   setInterval(async () => {
     const previous = state.status;

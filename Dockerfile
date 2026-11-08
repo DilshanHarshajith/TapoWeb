@@ -9,7 +9,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TAPO_WEB_HOST=0.0.0.0 \
-    TAPO_WEB_PORT=8080
+    TAPO_WEB_PORT=8080 \
+    TAPO_RECORDINGS_DIR=/app/manual-recordings
 
 # ffmpeg is required for the live HLS stream and snapshots. tini reaps the
 # ffmpeg child process and forwards signals so `docker stop` shuts down fast.
@@ -23,10 +24,11 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py camera.py stream.py tapo_api.py recordings.py talk.py ./
+COPY app.py camera.py stream.py tapo_api.py recordings.py talk.py manual_recordings.py ./
 COPY static ./static
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin app \
+    && mkdir -p /app/manual-recordings \
     && chown -R app:app /app
 
 USER app

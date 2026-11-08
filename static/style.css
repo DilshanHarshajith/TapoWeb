@@ -370,6 +370,100 @@ select:focus-visible {
   display: none;
 }
 
+.rec-badge {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  background: rgba(9, 13, 18, 0.78);
+  border: 1px solid rgba(255, 107, 107, 0.5);
+  color: #ffe3e3;
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+
+.rec-badge.saving {
+  border-color: rgba(255, 180, 77, 0.55);
+  color: #ffddb0;
+}
+
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.45);
+  animation: rec-pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.rec-badge.saving .rec-dot {
+  background: #ffb44d;
+  animation: none;
+}
+
+@keyframes rec-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(255, 107, 107, 0);
+  }
+}
+
+.record-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+}
+
+.record-button .rec-dot {
+  background: currentColor;
+  animation: none;
+  box-shadow: none;
+}
+
+.record-button.recording {
+  background: rgba(255, 107, 107, 0.12);
+  border-color: rgba(255, 107, 107, 0.55);
+  color: var(--danger);
+}
+
+.record-button.recording .rec-dot {
+  background: var(--danger);
+  animation: rec-pulse 1.4s ease-in-out infinite;
+}
+
+.record-clock {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  opacity: 0.8;
+}
+
+.manual-rec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 230px;
+  overflow: auto;
+}
+
+.manual-rec-item .recording-time {
+  white-space: normal;
+}
+
 .controls {
   display: flex;
   flex-direction: column;

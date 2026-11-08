@@ -41,6 +41,11 @@
             <span id="video-status">Connecting to stream...</span>
           </div>
           <div class="video-hint">Hold a control to move · arrows to pan/tilt · Space to talk</div>
+          <div class="rec-badge" id="rec-badge" hidden>
+            <span class="rec-dot" aria-hidden="true"></span>
+            <span id="rec-badge-label">REC</span>
+            <span id="rec-badge-clock">00:00</span>
+          </div>
         </div>
       </div>
 
@@ -104,6 +109,30 @@
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7M6 9.5V20h12V9.5"/></svg>
           Home position
         </button>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Manual recording</h2>
+          <span class="muted" id="manual-rec-state">Idle</span>
+        </div>
+        <label class="recording-date-row" for="manual-destination">
+          <span>Save to</span>
+          <select id="manual-destination" aria-label="Recording destination">
+            <option value="download">This PC</option>
+            <option value="server">Server library</option>
+            <option value="both">Both</option>
+          </select>
+        </label>
+        <button class="primary record-button" type="button" id="manual-rec-toggle">
+          <span class="record-dot" aria-hidden="true"></span>
+          <span id="manual-rec-label">Start recording</span>
+          <span class="record-clock" id="manual-rec-clock">00:00</span>
+        </button>
+        <p class="hint" id="manual-rec-hint">Records the live stream on the server. Download-only clips are removed after 6 hours.</p>
+        <div class="manual-rec-list" id="manual-rec-list">
+          <p class="hint">No saved recordings yet.</p>
+        </div>
       </section>
 
       <section class="panel">
@@ -202,6 +231,7 @@
         <div><dt><kbd>D</kbd> / <kbd>A</kbd> / <kbd>N</kbd></dt><dd>Day / Auto / Night mode</dd></div>
         <div><dt><kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd></dt><dd>Go to saved preset 1–10</dd></div>
         <div><dt><kbd>S</kbd></dt><dd>Take a snapshot</dd></div>
+        <div><dt><kbd>R</kbd></dt><dd>Start or stop manual recording</dd></div>
         <div><dt><kbd>H</kbd></dt><dd>Move to the home position</dd></div>
         <div><dt>Arrows</dt><dd>Pan and tilt</dd></div>
         <div><dt><kbd>+</kbd> / <kbd>−</kbd></dt><dd>Digital zoom</dd></div>

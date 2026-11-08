@@ -18,3 +18,10 @@ services:
       TAPO_PORT: ${TAPO_PORT:-2020}
       TAPO_STREAM: ${TAPO_STREAM:-stream1}
       TAPO_CLOUD_PASS: ${TAPO_CLOUD_PASS:-}
+      # Manual recordings are written here and kept across container rebuilds.
+      TAPO_RECORDINGS_DIR: /app/manual-recordings
+    volumes:
+      - tapoweb-recordings:/app/manual-recordings
+
+volumes:
+  tapoweb-recordings:
