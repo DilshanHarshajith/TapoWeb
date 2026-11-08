@@ -13,6 +13,7 @@ The app talks to the camera directly on your local network. Credentials are kept
 - Presets: save, go to, delete
 - JPEG snapshots
 - Manual recording of the live stream, saved to this PC, the server library, or both
+- Custom names and comments for manual recordings and SD card clips
 - Digital zoom and fullscreen
 - Spotlight toggle and day/night mode via the Tapo local API
 - SD card recordings: browse clips by date, stream them directly, and download them as MP4
@@ -194,6 +195,7 @@ The **Recordings** tab browses the clips stored on the camera's SD card and play
 1. Open **Settings** and enter your Tapo account password, or set `TAPO_CLOUD_PASS`. The camera-account password is not enough for recordings.
 2. Switch to **Recordings** and pick a date. The panel shows SD card usage and every clip recorded that day.
 3. Select a clip to play it, or use **Download clip** to render an MP4.
+4. Use **Name** on a clip to add a custom name and a comment. The name is shown in the list, in the player header and in the downloaded file name.
 
 Playback is remuxed live from the camera's local playback stream into HLS, so it usually starts within a few seconds. A few things to know:
 
@@ -207,7 +209,7 @@ Playback is remuxed live from the camera's local playback stream into HLS, so it
 
 The **Live view** tab can record the live RTSP stream to an MP4 on the server. The camera's local API does not expose manual SD-card recording, so TapoWeb records the stream itself with ffmpeg.
 
-1. In **Live view**, choose a destination under **Save to**: **This PC**, **Server library**, or **Both**.
+1. In **Live view**, choose **This PC**, **Server library**, or **Both** under **Save to**, and optionally type a name for the clip.
 2. Press **Start recording** (or `R`). A REC badge and elapsed timer appear over the video.
 3. Press **Stop recording** (or `R`) to finish the MP4. The clip then appears in the manual recordings list below the controls.
 
@@ -224,6 +226,8 @@ A few things to know:
 - The recording uses its own RTSP connection in addition to the live view, and the camera limits how many simultaneous streams it serves.
 - Files are written to `TAPO_RECORDINGS_DIR` (default: a `manual-recordings/` folder next to `app.py`). The provided Compose file mounts a persistent volume at `/app/manual-recordings`, so the server library is restored after a restart. Download-only clips still expire after 6 hours.
 - Each clip has a small `.json` sidecar with its metadata. Removing files outside the app does not break the list; missing files are dropped on the next refresh.
+- Use **Name** in the manual recordings list to add a custom name and comment. The name is used for the downloaded MP4 file name and is stored in the clip's sidecar.
+- SD card clip names are stored in `sd-recording-notes.json` inside `TAPO_RECORDINGS_DIR`, so they survive restarts when that folder is on a persistent volume.
 - Manual recording needs `ffmpeg` and `ffprobe` in `PATH`; the Docker image includes both.
 
 ## Keyboard shortcuts

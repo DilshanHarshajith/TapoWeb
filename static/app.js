@@ -33,6 +33,7 @@ const state = {
   manualBusy: false,
   manualObservedIds: new Set(),
   manualSeenFailures: new Set(),
+  noteEditor: null,
   liveStopped: false,
   autoConnecting: false,
   view: "live",
@@ -787,6 +788,121 @@ function formatManualDate(timestamp) {
   });
 }
 
+function recordingName(recording) {
+  return String((recording && recording.name) || "").trim();
+}
+
+function recordingComment(recording) {
+  return String((recording && recording.comment) || "").trim();
+}
+
+function sameRecordingClip(a, b) {
+  return Boolean(
+    a &&
+      b &&
+      Number(a.startTime) === Number(b.startTime) &&
+      Number(a.endTime) === Number(b.endTime)
+  );
+}
+
+function openNoteEditor(kind, recording) {
+  if (!recording) return;
+  state.noteEditor = { kind, id: recording.id, recording };
+  const form = $("#note-form");
+  form.elements.name.value = recordingName(recording);
+  form.elements.comment.value = recordingComment(recording);
+  $("#note-modal-title").textContent = recordingName(recording)
+    ? "Edit recording details"
+    : "Name recording";
+  $("#note-modal-subtitle").textContent =
+    kind === "manual"
+      ? `${formatManualDate(recording.createdAt)} · ${formatRecordingDuration(
+          recording.duration
+        )}`
+      : `${formatRecordingClock(recording.startTime)} – ${formatRecordingClock(
+          recording.endTime
+        )} · ${formatRecordingDuration(recording.duration)}`;
+  $("#note-error").hidden = true;
+  $("#note-modal").hidden = false;
+  setTimeout(() => form.elements.name.focus(), 40);
+}
+
+function closeNoteEditor() {
+  state.noteEditor = null;
+  $("#note-modal").hidden = true;
+}
+
+function showNoteError(message) {
+  const element = $("#note-error");
+  element.textContent = message || "";
+  element.hidden = !message;
+}
+
+async function saveNote() {
+  const editor = state.noteEditor;
+  if (!editor) return;
+  const form = $("#note-form");
+  const body = {
+    name: form.elements.name.value.trim(),
+    comment: form.elements.comment.value.trim(),
+  };
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  showNoteError("");
+  try {
+    if (editor.kind === "manual") {
+      const updated = await api(`/api/manual-recordings/${editor.id}`, {
+        method: "PATCH",
+        body,
+      });
+      const index = state.manualRecordings.findIndex(
+        (item) => item.id === editor.id
+      );
+      if (index >= 0) {
+        state.manualRecordings[index] = {
+          ...state.manualRecordings[index],
+          ...updated,
+        };
+      }
+      if (state.manualRecording && state.manualRecording.id === editor.id) {
+        state.manualRecording = { ...state.manualRecording, ...updated };
+        renderManualRecording();
+      }
+      renderManualRecordingList();
+    } else {
+      const updated = await api("/api/recordings/notes", {
+        method: "PATCH",
+        body: {
+          ...body,
+          start: editor.recording.startTime,
+          end: editor.recording.endTime,
+        },
+      });
+      const index = state.recordings.findIndex((item) =>
+        sameRecordingClip(item, editor.recording)
+      );
+      if (index >= 0) {
+        state.recordings[index] = { ...state.recordings[index], ...updated };
+      }
+      if (sameRecordingClip(state.activeRecording, editor.recording)) {
+        state.activeRecording = { ...state.activeRecording, ...updated };
+        updateRecordingPlayerHeader(state.activeRecording);
+      }
+      renderRecordings();
+    }
+    closeNoteEditor();
+    toast(
+      body.name || body.comment
+        ? "Recording details saved"
+        : "Recording details cleared"
+    );
+  } catch (error) {
+    showNoteError(error.message || String(error));
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderManualRecording() {
   const record = state.manualRecording;
   const active = manualRecordingActive(record);
@@ -819,6 +935,7 @@ function renderManualRecording() {
   button.disabled = state.manualBusy || (active && !stoppable);
 
   $("#manual-destination").disabled = active || state.manualBusy;
+  $("#manual-name").disabled = active || state.manualBusy;
 
   const hint = $("#manual-rec-hint");
   if (stoppable) {
@@ -850,6 +967,13 @@ function renderManualRecordingList() {
 
     const info = document.createElement("div");
     info.className = "recording-info";
+    const name = recordingName(record);
+    if (name) {
+      const title = document.createElement("span");
+      title.className = "recording-name";
+      title.textContent = name;
+      info.append(title);
+    }
     const time = document.createElement("span");
     time.className = "recording-time";
     time.textContent = formatManualDate(record.createdAt);
@@ -862,10 +986,18 @@ function renderManualRecordingList() {
       record.duration
     )} · ${formatFileSize(record.size)} · ${destination}${expiry}`;
     info.append(time, meta);
+    const comment = recordingComment(record);
+    if (comment) {
+      const note = document.createElement("span");
+      note.className = "recording-comment";
+      note.textContent = comment;
+      info.append(note);
+    }
 
     const actions = document.createElement("div");
     actions.className = "recording-actions";
     for (const [action, label] of [
+      ["edit", "Name"],
       ["download", "Download"],
       ["delete", "Delete"],
     ]) {
@@ -943,18 +1075,20 @@ async function startManualRecording() {
     return;
   }
   const destination = $("#manual-destination").value || "download";
+  const name = $("#manual-name").value.trim();
   state.manualDestination = destination;
   state.manualBusy = true;
   renderManualRecording();
   try {
     const record = await api("/api/manual-recordings", {
       method: "POST",
-      body: { destination },
+      body: { destination, name },
     });
     state.manualObservedIds.add(record.id);
     if (destination !== "server") {
       state.manualPendingDownload = record.id;
     }
+    $("#manual-name").value = "";
     toast(
       destination === "server"
         ? "Recording started on the server"
@@ -1096,6 +1230,13 @@ function renderRecordings() {
 
     const info = document.createElement("div");
     info.className = "recording-info";
+    const name = recordingName(recording);
+    if (name) {
+      const title = document.createElement("span");
+      title.className = "recording-name";
+      title.textContent = name;
+      info.append(title);
+    }
     const time = document.createElement("span");
     time.className = "recording-time";
     time.textContent = `${formatRecordingClock(
@@ -1111,12 +1252,20 @@ function renderRecordings() {
       recording.duration
     )} · ${kind}`;
     info.append(time, meta);
+    const comment = recordingComment(recording);
+    if (comment) {
+      const note = document.createElement("span");
+      note.className = "recording-comment";
+      note.textContent = comment;
+      info.append(note);
+    }
 
     const actions = document.createElement("div");
     actions.className = "recording-actions";
     for (const [action, label] of [
       ["play", "Play"],
       ["download", "Download"],
+      ["edit", "Name"],
     ]) {
       const button = document.createElement("button");
       button.type = "button";
@@ -1285,12 +1434,19 @@ async function stopRecordingPlayback() {
 }
 
 function updateRecordingPlayerHeader(recording) {
-  $("#recording-title").textContent = `${formatRecordingClock(
+  const timeRange = `${formatRecordingClock(
     recording.startTime
   )} – ${formatRecordingClock(recording.endTime)}`;
-  $("#recording-subtitle").textContent = `${formatRecordingDuration(
-    recording.endTime - recording.startTime
-  )} clip · streaming from the SD card.`;
+  const name = recordingName(recording);
+  const subtitle = [
+    `${formatRecordingDuration(recording.endTime - recording.startTime)} clip`,
+    "streaming from the SD card.",
+  ];
+  if (name) subtitle.unshift(timeRange);
+  const comment = recordingComment(recording);
+  if (comment) subtitle.push(comment);
+  $("#recording-title").textContent = name || timeRange;
+  $("#recording-subtitle").textContent = subtitle.join(" · ");
 }
 
 async function waitForRecordingStream(id, token) {
@@ -1774,7 +1930,12 @@ function bindControls() {
     if (!button) return;
     const row = button.closest(".manual-rec-item");
     if (!row) return;
-    if (button.dataset.action === "download") {
+    if (button.dataset.action === "edit") {
+      const record = state.manualRecordings.find(
+        (item) => item.id === row.dataset.id
+      );
+      if (record) openNoteEditor("manual", record);
+    } else if (button.dataset.action === "download") {
       triggerDownload(
         `/api/manual-recordings/${row.dataset.id}/file?download=1`
       );
@@ -1788,6 +1949,27 @@ function bindControls() {
     $("#manual-rec-clock").textContent = clock;
     $("#rec-badge-clock").textContent = clock;
   }, 1000);
+
+  $("#note-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveNote();
+  });
+  $("#note-cancel").addEventListener("click", closeNoteEditor);
+  $("#note-clear").addEventListener("click", () => {
+    const form = $("#note-form");
+    form.elements.name.value = "";
+    form.elements.comment.value = "";
+    saveNote();
+  });
+  $("#note-modal").addEventListener("click", (event) => {
+    if (event.target === $("#note-modal")) closeNoteEditor();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#note-modal").hidden) {
+      event.preventDefault();
+      closeNoteEditor();
+    }
+  });
 
   $("#setup-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1867,6 +2049,8 @@ function bindControls() {
     if (!recording) return;
     if (button.dataset.action === "play") {
       await startRecordingPlayback(recording);
+    } else if (button.dataset.action === "edit") {
+      openNoteEditor("sd", recording);
     } else {
       await stopRecordingPlayback();
       await startRecordingJob(recording);
@@ -2030,7 +2214,7 @@ function bindControls() {
   );
 
   window.addEventListener("keydown", (event) => {
-    if (!$("#setup-modal").hidden || state.view !== "live") return;
+    if (!$("#setup-modal").hidden || !$("#note-modal").hidden || state.view !== "live") return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target;
     if (

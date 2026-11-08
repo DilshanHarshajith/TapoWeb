@@ -735,13 +735,30 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
 .recording-time {
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.recording-name {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.recording-comment {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .recording-meta {
@@ -753,6 +770,8 @@ select:focus-visible {
   display: flex;
   gap: 5px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .recording-actions .ghost {
@@ -886,8 +905,23 @@ input[type="number"] {
 }
 
 select:hover,
-input:hover {
+input:hover,
+textarea:hover {
   border-color: #33475e;
+}
+
+textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  background: #0b1118;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 11px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  transition: border-color 0.12s;
 }
 
 .row {

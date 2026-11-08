@@ -124,6 +124,10 @@
             <option value="both">Both</option>
           </select>
         </label>
+        <label class="recording-date-row" for="manual-name">
+          <span>Name</span>
+          <input id="manual-name" type="text" maxlength="120" placeholder="Optional clip name" aria-label="Recording name">
+        </label>
         <button class="primary record-button" type="button" id="manual-rec-toggle">
           <span class="record-dot" aria-hidden="true"></span>
           <span id="manual-rec-label">Start recording</span>
@@ -242,6 +246,25 @@
         <button class="ghost" type="button" id="keys-close">Close</button>
       </div>
     </div>
+  </div>
+
+  <div class="modal-backdrop" id="note-modal" hidden>
+    <form class="modal" id="note-form" role="dialog" aria-modal="true" aria-labelledby="note-modal-title">
+      <h2 id="note-modal-title">Name recording</h2>
+      <p class="muted" id="note-modal-subtitle">Add a name and a comment to this recording.</p>
+      <label>Name
+        <input name="name" type="text" maxlength="120" placeholder="e.g. Front door · delivery">
+      </label>
+      <label>Comment
+        <textarea name="comment" rows="3" maxlength="500" placeholder="Anything worth remembering about this clip"></textarea>
+      </label>
+      <p class="form-error" id="note-error" hidden></p>
+      <div class="modal-actions">
+        <button class="ghost danger" type="button" id="note-clear">Clear</button>
+        <button class="ghost" type="button" id="note-cancel">Cancel</button>
+        <button class="primary" type="submit">Save</button>
+      </div>
+    </form>
   </div>
 
   <div class="modal-backdrop" id="setup-modal" hidden>

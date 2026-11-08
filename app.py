@@ -18,6 +18,7 @@ from manual_recordings import ManualRecordingError, ManualRecordingManager
 from recordings import (
     RecordingDownloadManager,
     RecordingError,
+    RecordingNotes,
     RecordingService,
     RecordingStreamManager,
 )
@@ -46,6 +47,13 @@ recording_streams = None
 talk_session = None
 stream_manager = StreamManager()
 manual_recordings = ManualRecordingManager()
+recording_notes = RecordingNotes(manual_recordings.directory)
+
+
+def _download_name(name, fallback):
+    """Build a safe MP4 file name from a user-provided recording name."""
+    text = re.sub(r'[\\/:*?"<>|\r\n]+', "-", str(name or "")).strip(" .-")
+    return f"{text[:80]}.mp4" if text else fallback
 
 
 def rtsp_url(host, port, user, password, stream):
@@ -504,9 +512,25 @@ def recordings_for_date():
         return jsonify(error="Recording date is required"), 400
     try:
         service = get_recording_service()
-        return jsonify({"date": date, "recordings": service.list_for_date(date)})
+        recordings = recording_notes.annotate(service.list_for_date(date))
+        return jsonify({"date": date, "recordings": recordings})
     except RecordingError as exc:
         return jsonify(error=str(exc)), 400
+
+
+@app.patch("/api/recordings/notes")
+def recording_notes_update():
+    data = request.get_json(silent=True) or {}
+    try:
+        note = recording_notes.update(
+            data.get("start"),
+            data.get("end"),
+            name=data.get("name"),
+            comment=data.get("comment"),
+        )
+    except RecordingError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(note)
 
 
 @app.post("/api/recordings/download")
@@ -541,7 +565,11 @@ def recording_file(job_id):
     if job is None or path is None:
         return jsonify(error="Recording is not ready"), 404
     as_attachment = request.args.get("download") in ("1", "true", "yes")
-    filename = f"recording-{job['startTime']}-{job['endTime']}.mp4"
+    note = recording_notes.get(job["startTime"], job["endTime"])
+    filename = _download_name(
+        note.get("name") if note else None,
+        f"recording-{job['startTime']}-{job['endTime']}.mp4",
+    )
     return send_file(
         path,
         mimetype="video/mp4",
@@ -647,7 +675,9 @@ def manual_recordings_start():
         creds["stream"],
     )
     try:
-        record = manual_recordings.start(url, data.get("destination"))
+        record = manual_recordings.start(
+            url, data.get("destination"), data.get("name")
+        )
     except ManualRecordingError as exc:
         return jsonify(error=str(exc)), 400
     return jsonify(record), 202
@@ -669,6 +699,19 @@ def manual_recording_status(record_id):
     return jsonify(record)
 
 
+@app.patch("/api/manual-recordings/<record_id>")
+def manual_recording_update(record_id):
+    data = request.get_json(silent=True) or {}
+    record = manual_recordings.update(
+        record_id,
+        name=data.get("name"),
+        comment=data.get("comment"),
+    )
+    if record is None:
+        return jsonify(error="Recording not found"), 404
+    return jsonify(record)
+
+
 @app.get("/api/manual-recordings/<record_id>/file")
 def manual_recording_file(record_id):
     record = manual_recordings.get(record_id)
@@ -681,7 +724,7 @@ def manual_recording_file(record_id):
         mimetype="video/mp4",
         conditional=True,
         as_attachment=as_attachment,
-        download_name=record["fileName"],
+        download_name=_download_name(record.get("name"), record["fileName"]),
         max_age=0,
     )
 

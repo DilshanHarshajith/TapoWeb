@@ -13,6 +13,13 @@ class ManualRecordingError(Exception):
 
 
 DESTINATIONS = ("download", "server", "both")
+MAX_NAME_LENGTH = 120
+MAX_COMMENT_LENGTH = 500
+
+
+def _clean_text(value, limit):
+    text = str(value or "").strip()
+    return text[:limit] or None
 
 
 def _friendly_error(exc):
@@ -121,6 +128,8 @@ class ManualRecordingManager:
                 "path": path,
                 "tsPath": path[:-4] + ".ts",
                 "metaPath": meta_path,
+                "name": _clean_text(meta.get("name"), MAX_NAME_LENGTH),
+                "comment": _clean_text(meta.get("comment"), MAX_COMMENT_LENGTH),
                 "createdAt": created,
                 "startedAt": started,
                 "endedAt": meta.get("endedAt"),
@@ -143,7 +152,7 @@ class ManualRecordingManager:
                 f"Could not create the recording folder: {exc}"
             ) from exc
 
-    def start(self, url, destination):
+    def start(self, url, destination, name=None):
         destination = str(destination or "download").strip().lower()
         if destination not in DESTINATIONS:
             raise ManualRecordingError("Choose where to save the recording")
@@ -169,6 +178,8 @@ class ManualRecordingManager:
                 "path": os.path.join(self._directory, file_name),
                 "tsPath": os.path.join(self._directory, file_name[:-4] + ".ts"),
                 "metaPath": os.path.join(self._directory, file_name[:-4] + ".json"),
+                "name": _clean_text(name, MAX_NAME_LENGTH),
+                "comment": None,
                 "createdAt": created,
                 "startedAt": created,
                 "endedAt": None,
@@ -232,6 +243,27 @@ class ManualRecordingManager:
         with self._lock:
             record = self._records.get(record_id)
             return self._public(record) if record is not None else None
+
+    def update(self, record_id, name=None, comment=None):
+        """Store a user-provided name and comment on a recording.
+
+        ``name`` and ``comment`` are only changed when the caller passes them
+        (``None`` leaves the existing value alone). Passing an empty string
+        clears the field. In-progress recordings keep the values in memory and
+        the metadata sidecar written when they finish persists them.
+        """
+        with self._lock:
+            record = self._records.get(record_id)
+            if record is None:
+                return None
+            if name is not None:
+                record["name"] = _clean_text(name, MAX_NAME_LENGTH)
+            if comment is not None:
+                record["comment"] = _clean_text(comment, MAX_COMMENT_LENGTH)
+            ready = record["state"] == "ready"
+        if ready:
+            self._write_meta(record)
+        return self._public(record)
 
     def path(self, record_id):
         with self._lock:
@@ -303,6 +335,8 @@ class ManualRecordingManager:
         return {
             "id": record["id"],
             "fileName": record["fileName"],
+            "name": record.get("name"),
+            "comment": record.get("comment"),
             "state": state,
             "createdAt": record["createdAt"],
             "startedAt": record["startedAt"],
@@ -432,6 +466,8 @@ class ManualRecordingManager:
             key: record.get(key)
             for key in (
                 "id",
+                "name",
+                "comment",
                 "createdAt",
                 "startedAt",
                 "endedAt",

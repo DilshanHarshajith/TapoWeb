@@ -108,6 +108,130 @@ def _normalize_storage(raw):
     return cards
 
 
+def _clean_text(value, limit):
+    text = str(value or "").strip()
+    return text[:limit] or None
+
+
+class RecordingNotes:
+    """Persistent names and comments for SD card clips.
+
+    SD card clips live on the camera and cannot be edited there, so the notes
+    are kept in a small JSON file next to the server recording library. The
+    file is tied to a clip's start and end timestamp.
+    """
+
+    MAX_NAME_LENGTH = 120
+    MAX_COMMENT_LENGTH = 500
+    MAX_ENTRIES = 5000
+
+    def __init__(self, directory):
+        self.directory = os.path.abspath(directory)
+        self.path = os.path.join(self.directory, "sd-recording-notes.json")
+        self._lock = threading.RLock()
+        self._notes = self._load()
+
+    @staticmethod
+    def key(start, end):
+        start = _as_timestamp(start)
+        end = _as_timestamp(end)
+        if start is None or end is None:
+            return None
+        return f"{start}-{end}"
+
+    def _load(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as file:
+                data = json.load(file)
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        notes = {}
+        for key, value in data.items():
+            if not isinstance(value, dict):
+                continue
+            name = _clean_text(value.get("name"), self.MAX_NAME_LENGTH)
+            comment = _clean_text(value.get("comment"), self.MAX_COMMENT_LENGTH)
+            if name is None and comment is None:
+                continue
+            notes[str(key)] = {
+                "name": name,
+                "comment": comment,
+                "updatedAt": value.get("updatedAt") or 0,
+            }
+        return notes
+
+    def _save(self):
+        try:
+            os.makedirs(self.directory, exist_ok=True)
+        except OSError as exc:
+            raise RecordingError("Could not save the recording note") from exc
+        temporary = self.path + ".tmp"
+        try:
+            with open(temporary, "w", encoding="utf-8") as file:
+                json.dump(self._notes, file)
+            os.replace(temporary, self.path)
+        except OSError as exc:
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+            raise RecordingError("Could not save the recording note") from exc
+
+    def get(self, start, end):
+        key = self.key(start, end)
+        if key is None:
+            return None
+        with self._lock:
+            note = self._notes.get(key)
+            return dict(note) if note else None
+
+    def annotate(self, recordings):
+        with self._lock:
+            notes = {key: dict(value) for key, value in self._notes.items()}
+        for recording in recordings:
+            note = notes.get(
+                self.key(recording.get("startTime"), recording.get("endTime"))
+            )
+            recording["name"] = note.get("name") if note else None
+            recording["comment"] = note.get("comment") if note else None
+        return recordings
+
+    def update(self, start, end, name=None, comment=None):
+        key = self.key(start, end)
+        if key is None:
+            raise RecordingError("A valid recording start and end time are required")
+        with self._lock:
+            existing = self._notes.get(key, {})
+            updated = {
+                "name": existing.get("name"),
+                "comment": existing.get("comment"),
+                "updatedAt": existing.get("updatedAt") or 0,
+            }
+            if name is not None:
+                updated["name"] = _clean_text(name, self.MAX_NAME_LENGTH)
+            if comment is not None:
+                updated["comment"] = _clean_text(comment, self.MAX_COMMENT_LENGTH)
+            if updated["name"] is None and updated["comment"] is None:
+                self._notes.pop(key, None)
+            else:
+                updated["updatedAt"] = time.time()
+                self._notes[key] = updated
+                if len(self._notes) > self.MAX_ENTRIES:
+                    ordered = sorted(
+                        self._notes.items(),
+                        key=lambda item: item[1].get("updatedAt") or 0,
+                        reverse=True,
+                    )
+                    self._notes = dict(ordered[: self.MAX_ENTRIES])
+            self._save()
+        return {
+            "name": updated.get("name"),
+            "comment": updated.get("comment"),
+        }
+
+
 class RecordingService:
     """Small wrapper around the Tapo local API for SD card browsing."""
 
