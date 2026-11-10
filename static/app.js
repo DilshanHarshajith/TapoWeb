@@ -18,6 +18,9 @@ const state = {
   presets: [],
   recordingDates: [],
   recordings: [],
+  recordingView: [],
+  recordingType: "all",
+  recordingOrder: "desc",
   recordingLoaded: false,
   recordingJob: null,
   recordingTimer: null,
@@ -619,6 +622,40 @@ function recordingsAvailable(status = state.status) {
   return Boolean(status && status.authenticated && status.has_cloud_password);
 }
 
+function recordingKind(recording) {
+  // The camera reports timed (continuous) recordings as video_type "1".
+  // Detection-triggered clips use any other value.
+  return recording && recording.type && String(recording.type) !== "1"
+    ? "motion"
+    : "continuous";
+}
+
+function recordingKindLabel(recording) {
+  return recordingKind(recording) === "motion" ? "Motion" : "Continuous";
+}
+
+function setRecordingFilterDisabled(disabled) {
+  $("#recordings-type").disabled = disabled;
+  $("#recordings-order").disabled = disabled;
+}
+
+function visibleRecordings() {
+  const direction = state.recordingOrder === "asc" ? 1 : -1;
+  return state.recordings
+    .filter(
+      (recording) =>
+        state.recordingType === "all" ||
+        recordingKind(recording) === state.recordingType
+    )
+    .slice()
+    .sort((a, b) => {
+      const start =
+        (Number(a.startTime) || 0) - (Number(b.startTime) || 0);
+      if (start !== 0) return start * direction;
+      return ((Number(a.endTime) || 0) - (Number(b.endTime) || 0)) * direction;
+    });
+}
+
 function resetRecordingState() {
   clearTimeout(state.recordingTimer);
   state.recordingTimer = null;
@@ -626,10 +663,12 @@ function resetRecordingState() {
   state.recordingLoaded = false;
   state.recordingDates = [];
   state.recordings = [];
+  state.recordingView = [];
   const select = $("#recordings-date");
   select.innerHTML = "";
   select.append(new Option("No recordings", ""));
   select.disabled = true;
+  setRecordingFilterDisabled(true);
   updateRecordingProgress(null);
   stopRecordingPlayback();
   $("#recordings-list").innerHTML =
@@ -1177,7 +1216,9 @@ async function loadRecordingDates() {
     if (!state.recordingDates.length) {
       select.append(new Option("No recordings", ""));
       select.disabled = true;
+      setRecordingFilterDisabled(true);
       state.recordings = [];
+      state.recordingView = [];
       $("#recordings-list").innerHTML =
         '<p class="hint">No recordings were found on the SD card.</p>';
       return;
@@ -1186,12 +1227,14 @@ async function loadRecordingDates() {
       select.append(new Option(formatRecordingDate(date), date));
     }
     select.disabled = false;
+    setRecordingFilterDisabled(false);
     select.value = state.recordingDates.includes(previous)
       ? previous
       : state.recordingDates[0];
     await loadRecordings();
   } catch (error) {
     $("#recordings-storage").textContent = "Could not read the SD card.";
+    setRecordingFilterDisabled(true);
     $("#recordings-list").innerHTML =
       '<p class="hint">Refresh to try loading recordings again.</p>';
     showError(error);
@@ -1211,6 +1254,7 @@ async function loadRecordings() {
     renderRecordings();
   } catch (error) {
     state.recordings = [];
+    state.recordingView = [];
     list.innerHTML =
       '<p class="hint">Could not load recordings for this day.</p>';
     showError(error);
@@ -1220,11 +1264,14 @@ async function loadRecordings() {
 function renderRecordings() {
   const list = $("#recordings-list");
   list.innerHTML = "";
-  if (!state.recordings.length) {
-    list.innerHTML = '<p class="hint">No recordings for this day.</p>';
+  state.recordingView = visibleRecordings();
+  if (!state.recordingView.length) {
+    list.innerHTML = state.recordings.length
+      ? '<p class="hint">No recordings match this filter.</p>'
+      : '<p class="hint">No recordings for this day.</p>';
     return;
   }
-  state.recordings.forEach((recording, index) => {
+  state.recordingView.forEach((recording, index) => {
     const row = document.createElement("div");
     row.className = "recording-item";
 
@@ -1244,13 +1291,9 @@ function renderRecordings() {
     )} – ${formatRecordingClock(recording.endTime)}`;
     const meta = document.createElement("span");
     meta.className = "recording-meta";
-    const kind =
-      recording.type && String(recording.type) !== "1"
-        ? "Motion"
-        : "Continuous";
     meta.textContent = `${formatRecordingDuration(
       recording.duration
-    )} · ${kind}`;
+    )} · ${recordingKindLabel(recording)}`;
     info.append(time, meta);
     const comment = recordingComment(recording);
     if (comment) {
@@ -1279,6 +1322,7 @@ function renderRecordings() {
     row.append(info, actions);
     list.append(row);
   });
+  setRecordingButtonsDisabled(Boolean(state.recordingJob));
 }
 
 function setRecordingButtonsDisabled(disabled) {
@@ -2042,10 +2086,18 @@ function bindControls() {
 
   $("#recordings-refresh").addEventListener("click", loadRecordingDates);
   $("#recordings-date").addEventListener("change", loadRecordings);
+  $("#recordings-type").addEventListener("change", (event) => {
+    state.recordingType = event.target.value;
+    renderRecordings();
+  });
+  $("#recordings-order").addEventListener("change", (event) => {
+    state.recordingOrder = event.target.value;
+    renderRecordings();
+  });
   $("#recordings-list").addEventListener("click", async (event) => {
     const button = event.target.closest("button[data-action]");
     if (!button) return;
-    const recording = state.recordings[Number(button.dataset.index)];
+    const recording = state.recordingView[Number(button.dataset.index)];
     if (!recording) return;
     if (button.dataset.action === "play") {
       await startRecordingPlayback(recording);

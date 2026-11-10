@@ -878,6 +878,12 @@ select:focus-visible {
   gap: 9px;
 }
 
+.recording-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .recording-date-row > span {
   flex-shrink: 0;
   color: var(--muted);

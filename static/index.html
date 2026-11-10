@@ -212,6 +212,23 @@
               <option value="">No recordings</option>
             </select>
           </label>
+          <div class="recording-filters">
+            <label class="recording-date-row" for="recordings-type">
+              <span>Type</span>
+              <select id="recordings-type" aria-label="Recording type" disabled>
+                <option value="all">All recordings</option>
+                <option value="continuous">Continuous</option>
+                <option value="motion">Motion</option>
+              </select>
+            </label>
+            <label class="recording-date-row" for="recordings-order">
+              <span>Order</span>
+              <select id="recordings-order" aria-label="Recording order" disabled>
+                <option value="desc">Newest first</option>
+                <option value="asc">Oldest first</option>
+              </select>
+            </label>
+          </div>
           <div class="recording-list" id="recordings-list">
             <p class="hint">Choose a day to see its recordings.</p>
           </div>

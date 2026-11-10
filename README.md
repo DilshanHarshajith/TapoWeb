@@ -193,7 +193,7 @@ TAPO_CLOUD_PASS=tapo-account-pass \
 The **Recordings** tab browses the clips stored on the camera's SD card and plays them without downloading the whole file first.
 
 1. Open **Settings** and enter your Tapo account password, or set `TAPO_CLOUD_PASS`. The camera-account password is not enough for recordings.
-2. Switch to **Recordings** and pick a date. The panel shows SD card usage and every clip recorded that day.
+2. Switch to **Recordings** and pick a date. The panel shows SD card usage and every clip recorded that day, newest first. Use **Type** to show all clips, continuous recordings or motion-triggered clips, and **Order** to switch between newest and oldest first.
 3. Select a clip to play it, or use **Download clip** to render an MP4.
 4. Use **Name** on a clip to add a custom name and a comment. The name is shown in the list, in the player header and in the downloaded file name.
 

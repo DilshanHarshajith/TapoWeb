@@ -86,7 +86,8 @@ def _normalize_recordings(raw):
         if video_type is not None:
             recording["type"] = str(video_type)
         recordings.append(recording)
-    recordings.sort(key=lambda entry: entry["startTime"])
+    # Newest first is the default everywhere recordings are listed.
+    recordings.sort(key=lambda entry: entry["startTime"], reverse=True)
     return recordings
 
 
